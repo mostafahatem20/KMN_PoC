@@ -1,0 +1,7 @@
+index: 2
+database_username: db2user
+database_password: db2password
+database_host: localhost
+database_port: 5434
+database_name: db2
+server_port: 50053

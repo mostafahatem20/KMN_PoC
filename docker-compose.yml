@@ -1,0 +1,82 @@
+version: "3.8"
+services:
+  db0:
+    image: postgres:15.4-alpine
+    container_name: db0
+    ports:
+      - "5435:5432"
+    networks:
+      - example-kmn
+    environment:
+      - POSTGRES_DB=db0
+      - POSTGRES_USER=db0user
+      - POSTGRES_PASSWORD=db0password
+    restart: always
+
+  db1:
+    image: postgres:15.4-alpine
+    container_name: db1
+    ports:
+      - "5433:5432"
+    networks:
+      - example-kmn
+    environment:
+      - POSTGRES_DB=db1
+      - POSTGRES_USER=db1user
+      - POSTGRES_PASSWORD=db1password
+    restart: always
+
+  db2:
+    image: postgres:15.2-alpine
+    container_name: db2
+    ports:
+      - "5434:5432"
+    networks:
+      - example-kmn
+    environment:
+      - POSTGRES_DB=db2
+      - POSTGRES_USER=db2user
+      - POSTGRES_PASSWORD=db2password
+    restart: always
+
+  db3:
+    image: postgres:15.2-alpine
+    container_name: db3
+    ports:
+      - "5436:5432"
+    networks:
+      - example-kmn
+    environment:
+      - POSTGRES_DB=db3
+      - POSTGRES_USER=db3user
+      - POSTGRES_PASSWORD=db3password
+    restart: always
+
+  db4:
+    image: postgres:15.2-alpine
+    container_name: db4
+    ports:
+      - "5437:5432"
+    networks:
+      - example-kmn
+    environment:
+      - POSTGRES_DB=db4
+      - POSTGRES_USER=db4user
+      - POSTGRES_PASSWORD=db4password
+    restart: always
+
+  db5:
+    image: postgres:15.2-alpine
+    container_name: db5
+    ports:
+      - "5438:5432"
+    networks:
+      - example-kmn
+    environment:
+      - POSTGRES_DB=db5
+      - POSTGRES_USER=db5user
+      - POSTGRES_PASSWORD=db5password
+    restart: always
+
+networks:
+  example-kmn:

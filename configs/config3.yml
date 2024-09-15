@@ -1,0 +1,7 @@
+index: 0
+database_username: db3user
+database_password: db3password
+database_host: localhost
+database_port: 5436
+database_name: db3
+server_port: 50054

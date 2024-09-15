@@ -1,0 +1,41 @@
+[package]
+name = "kmn_poc"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.86"
+cggmp21 = { version = "0.4.0", features = ["curve-secp256r1", "spof"] }
+futures = "0.3.30"
+rand = "0.8.4"
+serde = { version = "1.0.204", features = ["derive"] }
+serde_json = "1.0.120"
+sha2 = "0.10.8"
+tokio = { version = "1.38.1", features = ["full"] }
+libp2p = { version = "0.53.2", features = ["request-response", "noise", "tcp", "yamux", "mdns", "tokio", "macros", "json", "gossipsub", "serde", "identify"] }
+toml = "0.8.19"
+tonic = "0.12.1"
+prost = "0.13.1"
+tonic-reflection = "0.12.1"
+tower-http = {version = "0.5.2", features = ["cors"]}
+diesel = { version = "2.2.2", features = ["postgres", "uuid"] }
+uuid = { version = "1.10.0", features = ["v5", "v4"] }
+num_cpus = "1.16.0"
+p256 = { version = "0.13.2", features = ["ecdh", "ecdsa", "arithmetic"]}
+num-bigint = "0.4.6"
+serde_yaml = "0.9.34"
+
+[build-dependencies]
+tonic-build = "0.12.1"
+
+[[bin]]
+name = "server"
+path = "src/server.rs"
+
+[[bin]]
+name = "node"
+path = "src/main.rs"
+
+[[bin]]
+name = "client"
+path = "src/client.rs"

@@ -1,0 +1,8 @@
+threshold: 2
+number_of_parties: 3
+topic: consensus
+port: 50055
+urls:
+  - "http://[::1]:50051"
+  - "http://[::1]:50052"
+  - "http://[::1]:50053"

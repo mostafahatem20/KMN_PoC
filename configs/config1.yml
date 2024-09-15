@@ -1,0 +1,7 @@
+index: 1
+database_username: db1user
+database_password: db1password
+database_host: localhost
+database_port: 5433
+database_name: db1
+server_port: 50052

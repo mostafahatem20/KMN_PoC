@@ -1,0 +1,74 @@
+syntax = "proto3";
+
+package kmn_poc;
+
+service KeyManagement {
+  rpc Sign(SignRequest) returns (SignResponse);
+  rpc SignOnline(SignOnlineRequest) returns (SignOnlineResponse);
+  rpc GetKeys(GetKeysRequest) returns (GetKeysResponse);
+  rpc GetKey(GetKeyRequest) returns (GetKeyResponse);
+  rpc KeyUpdate(KeyUpdateRequest) returns (KeyUpdateResponse);
+  rpc GenerateKey(GenerateKeyRequest) returns (GenerateKeyResponse);
+}
+
+message SignRequest {
+  bytes msg = 1;
+  string key_id = 2;
+}
+
+message SignResponse {
+  string partial_signature = 1;
+}
+
+message SignOnlineRequest {
+  bytes msg = 1;
+  string key_id = 2;
+  int32 room_id = 3;
+  bytes eid = 4;
+}
+
+message SignOnlineResponse {
+  string signature = 1;
+}
+
+
+message GetKeysRequest {}
+
+message GetKeysResponse {
+  repeated KeyInfo keys = 1;
+}
+
+message KeyInfo {
+  string key_id = 1;
+  string pub_key = 2;
+}
+
+message GetKeyRequest {
+    string key_id = 1;
+}
+
+message GetKeyResponse{
+    string key_share = 1;
+}
+message KeyUpdateRequest {
+    string key_id = 1;
+    string new_key_id = 2;
+    string key_share = 3;
+}
+
+message KeyUpdateResponse {
+    string key_id = 1;
+    string pub_key = 2;
+}
+
+message GenerateKeyRequest {
+    int32 room_id = 1;
+    bytes eid = 2;
+    int32 number_of_parties = 3;
+    int32 threshold = 4;
+}
+
+message GenerateKeyResponse {
+  string key_id = 1;
+  string pub_key = 2;
+}

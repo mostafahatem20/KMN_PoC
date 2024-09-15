@@ -1,0 +1,7 @@
+index: 0
+database_username: db0user
+database_password: db0password
+database_host: localhost
+database_port: 5435
+database_name: db0
+server_port: 50051
