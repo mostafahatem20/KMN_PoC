@@ -43,7 +43,7 @@ services:
     image: postgres:15.2-alpine
     container_name: db3
     ports:
-      - "5436:5432"
+      - "5435:5432"
     networks:
       - example-kmn
     environment:
@@ -56,7 +56,7 @@ services:
     image: postgres:15.2-alpine
     container_name: db4
     ports:
-      - "5437:5432"
+      - "5436:5432"
     networks:
       - example-kmn
     environment:
@@ -69,7 +69,7 @@ services:
     image: postgres:15.2-alpine
     container_name: db5
     ports:
-      - "5438:5432"
+      - "5437:5432"
     networks:
       - example-kmn
     environment:
