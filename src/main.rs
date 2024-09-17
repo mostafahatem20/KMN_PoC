@@ -26,9 +26,9 @@ use std::io::Write;
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     // Initialize logging to log errors to a file
-    let mut log_file = OpenOptions::new().append(true).create(true).open("application_errors.log")?;
-
     let args: Vec<String> = env::args().collect();
+    let log_file_name = format!("application_errors_{}.log", args.join("_"));
+    let mut log_file = OpenOptions::new().append(true).create(true).open(&log_file_name)?;
 
     if let Err(err) = actual_main(args).await {
         writeln!(log_file, "Error: {:?}", err).unwrap();
