@@ -1,6 +1,6 @@
 use serde::Deserialize;
 use std::fs;
-use std::error::Error;
+use anyhow::Error;
 #[derive(Deserialize, Debug)]
 pub struct Config {
     pub index: usize,
@@ -20,7 +20,7 @@ pub struct SetupConfig {
     pub urls: Vec<String>,  // Add a field for URLs
 }
 
-pub fn read_config(path: &str) -> Result<Config, Box<dyn Error>> {
+pub fn read_config(path: &str) -> Result<Config, Error> {
     // Read the YAML file from the specified path
     let config_content = fs::read_to_string(path)?;
 
@@ -31,7 +31,7 @@ pub fn read_config(path: &str) -> Result<Config, Box<dyn Error>> {
     Ok(config)
 }
 
-pub fn read_setup_config(path: &str) -> Result<SetupConfig, Box<dyn Error>> {
+pub fn read_setup_config(path: &str) -> Result<SetupConfig, Error> {
     // Read the YAML file from the specified path
     let config_content = fs::read_to_string(path)?;
 

@@ -1,7 +1,7 @@
 use std::{ env, sync::Arc };
 use futures::future::join_all;
 use tokio::{ self, sync::{ mpsc::unbounded_channel, Semaphore } };
-use anyhow::Error;
+use anyhow::{Error, anyhow};
 use kmn_poc::{
     database::{
         database::{ create_tables_if_not_exists, establish_connection },
@@ -19,32 +19,44 @@ use kmn_poc::{
         utils::{ generate_array_i16, generate_array_u16, generate_uuid_v5_from_execution_id },
     },
 };
+use std::fs::OpenOptions;
 use num_cpus;
+use std::io::Write;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
+    // Initialize logging to log errors to a file
+    let mut log_file = OpenOptions::new().append(true).create(true).open("application_errors.log")?;
+
     let args: Vec<String> = env::args().collect();
 
-    // Validate the number of arguments based on the operation
-    if args.len() < 4 || (args[2] == "KEY_GEN" && args.len() != 5) {
-        eprintln!(
-            "Usage: {} <path_to_global_config> <path_to_local_config> <operation> [<number_of_keys>]",
-            args[0]
-        );
-        std::process::exit(1);
+    if let Err(err) = actual_main(args).await {
+        writeln!(log_file, "Error: {:?}", err).unwrap();
+        println!("An error occurred: {:?}", err);
+        return Ok(());
     }
+
+    Ok(())
+}
+
+async fn actual_main(args: Vec<String>) -> Result<(), Error> {
+    // Your existing main logic goes here
+    // Wrap the main code and return errors, so they can be logged
+    if args.len() < 4 || (args[2] == "KEY_GEN" && args.len() != 5) {
+        return Err(anyhow!("Invalid number of arguments"));
+    }
+
     let setup_path = args[1].clone();
     let path = args[2].clone();
     let operation = args[3].clone();
 
     // Validate the operation
     if operation != "KEY_GEN" && operation != "PRE_SIGN" {
-        eprintln!("Invalid operation: {}. Please use 'KEY_GEN' or 'PRE_SIGN'.", operation);
-        std::process::exit(1);
+        return Err(anyhow!("Invalid operation: {}", operation));
     }
 
-    let config = config::read_config(&path).unwrap();
-    let setup_config = config::read_setup_config(&setup_path).unwrap();
+    let config = config::read_config(&path)?;
+    let setup_config = config::read_setup_config(&setup_path)?;
     let threshold = setup_config.threshold;
     let number_of_parties = setup_config.number_of_parties;
     let index = config.index;
@@ -54,16 +66,13 @@ async fn main() -> Result<(), Error> {
     set_database_url(database_url.clone());
     set_index(index);
 
-    // Ensure the keys table exists
     let connection = &mut establish_connection(database_url.clone());
     if let Err(err) = create_tables_if_not_exists(connection) {
-        eprintln!("Failed to create table: {}", err);
-        std::process::exit(1);
+        return Err(anyhow!("Failed to create table: {}", err));
     }
 
-    // Handle operations
     if operation == "KEY_GEN" {
-        let number_of_keys: usize = args[4].clone().parse().unwrap(); // Only parse number_of_keys for KEY_GEN
+        let number_of_keys: usize = args[4].parse()?;
         let _ = generate_keys(number_of_keys, index, threshold, number_of_parties, topic).await?;
     } else if operation == "PRE_SIGN" {
         let _ = generate_pre_signatures(index, threshold, topic).await?;
@@ -71,7 +80,6 @@ async fn main() -> Result<(), Error> {
 
     Ok(())
 }
-
 pub async fn generate_keys(
     number_of_keys: usize,
     index: usize,
