@@ -16,8 +16,8 @@ pub struct SetupConfig {
     pub threshold: usize,
     pub number_of_parties: usize,
     pub topic: String,
-    pub port: usize,
-    pub urls: Vec<String>,  // Add a field for URLs
+    pub port: Option<usize>,
+    pub urls: Option<Vec<String>>,  // Add a field for URLs
 }
 
 pub fn read_config(path: &str) -> Result<Config, Error> {

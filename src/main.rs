@@ -27,7 +27,8 @@ use std::io::Write;
 async fn main() -> Result<(), Error> {
     // Initialize logging to log errors to a file
     let args: Vec<String> = env::args().collect();
-    let log_file_name = format!("application_errors_{}.log", args.join("_"));
+    let log_file_name = format!("application_errors_{}.log", args[1..].join("_").replace("/", "_"));
+    println!("{:?}",log_file_name);
     let mut log_file = OpenOptions::new().append(true).create(true).open(&log_file_name)?;
 
     if let Err(err) = actual_main(args).await {

@@ -1,0 +1,12 @@
+threshold: {{ service.threshold }}
+number_of_parties: {{ service.number_of_parties }}
+topic: {{ service.topic }}
+{% if service.client_port  is defined %}
+port: {{ service.client_port }}
+{% endif %}
+{% if urls is defined %}
+urls:
+{% for url in urls %}
+  - "{{ url }}"
+{% endfor %}
+{% endif %}

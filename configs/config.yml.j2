@@ -1,0 +1,7 @@
+index: {{ service.index }}
+database_username: db{{ service.index }}user
+database_password: db{{ service.index }}password
+database_host: localhost
+database_port: {{ 5432 + service.index }}
+database_name: db{{ service.index }}
+server_port: {{ service.port }}

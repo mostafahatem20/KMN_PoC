@@ -22,12 +22,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let setup_path = args[1].clone();
     let setup_config = config::read_setup_config(&setup_path).unwrap();
 
+    let port = setup_config.port.ok_or("Port is not provided")?;
+
     // Set threshold and number of parties
     set_threshold(setup_config.threshold);
     set_number_of_parties(setup_config.number_of_parties);
 
     // Use the URLs from the config
-    let urls = setup_config.urls;
+    let urls = setup_config.urls.ok_or("Urls are not provided")?;
 
     // Assuming there's at least one URL for the first client
     let channel = Channel::builder(urls[0].clone().parse().unwrap()).connect().await.unwrap();
@@ -44,7 +46,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Start the client-server with URLs from the config and the new keys structure
     let _ = client_server::start_client_server(
-        setup_config.port,
+        port,
         keys_map,
         urls.clone() // Use all URLs
     ).await;
