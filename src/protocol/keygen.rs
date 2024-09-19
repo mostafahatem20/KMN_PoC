@@ -9,6 +9,7 @@ use cggmp21::{
 use rand::rngs::OsRng;
 use anyhow::anyhow;
 use crate::network::{ network::join_computation, node::{ NodeReceiver, NodeSender } };
+use crate::utils::utils::MyPerfReport;
 
 pub async fn run(
     sender: NodeSender,
@@ -18,7 +19,7 @@ pub async fn run(
     number_of_parties: u16,
     eid: &[u8],
     room_id: usize
-) -> Result<IncompleteKeyShare<Secp256r1>, Error> {
+) -> Result<(IncompleteKeyShare<Secp256r1>, MyPerfReport), Error> {
     let (delivery, listening, sending) = join_computation(
         sender,
         receiver,
@@ -43,9 +44,9 @@ pub async fn run(
     listening.abort();
 
     let report = profiler.get_report().context("get perf report")?;
-    println!("Key Generation {}", report.display_io(false));
+    println!("Key Generation {}", report);
 
-    Ok(output)
+    Ok((output, MyPerfReport(report)))
 }
 
 pub async fn load(filename: String) -> Result<IncompleteKeyShare<Secp256r1>, Error> {

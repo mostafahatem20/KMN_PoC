@@ -246,9 +246,6 @@ impl Node {
                 })
                 .collect();
 
-            println!("receiver futures isEmpty: {:?}", receiver_futures.is_empty());
-            println!("pending requests: {:?}", pending_requests);
-
             if receiver_futures.is_empty() && pending_requests.is_empty() {
                 break;
             }

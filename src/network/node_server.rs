@@ -134,7 +134,7 @@ impl KeyManagement for NodeServer {
         let node_task = tokio::spawn(async move { node.run().await });
         connection_rx.recv().await;
 
-        let signature = sign
+        let (signature, _) = sign
             ::run(
                 sender1,
                 receiver1,
@@ -181,7 +181,7 @@ impl KeyManagement for NodeServer {
         let node_task = tokio::spawn(async move { node.run().await });
         connection_rx.recv().await;
 
-        let incomplete_key_share = keygen
+        let (incomplete_key_share, _) = keygen
             ::run(
                 sender,
                 receiver,

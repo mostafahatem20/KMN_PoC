@@ -12,7 +12,10 @@ use cggmp21::{
 };
 use rand::rngs::OsRng;
 use sha2::Sha256;
-use crate::network::{ network::join_computation, node::{ NodeReceiver, NodeSender } };
+use crate::{
+    network::{ network::join_computation, node::{ NodeReceiver, NodeSender } },
+    utils::utils::MyPerfReport,
+};
 use anyhow::anyhow;
 
 pub async fn run(
@@ -24,7 +27,7 @@ pub async fn run(
     message: &[u8],
     eid: &[u8],
     room_id: usize
-) -> Result<Signature<Secp256r1>, Error> {
+) -> Result<(Signature<Secp256r1>, MyPerfReport), Error> {
     let (delivery, listening, sending) = join_computation(
         sender,
         receiver,
@@ -50,9 +53,9 @@ pub async fn run(
     listening.abort();
 
     let report = profiler.get_report().context("get perf report")?;
-    println!("Sign {}", report.display_io(false));
+    println!("Sign {}", report);
 
-    Ok(output)
+    Ok((output, MyPerfReport(report)))
 }
 
 pub async fn pre_sign(
@@ -63,7 +66,7 @@ pub async fn pre_sign(
     parties_indexes_at_keygen: &[u16],
     eid: &[u8],
     room_id: usize
-) -> Result<Presignature<Secp256r1>, Error> {
+) -> Result<(Presignature<Secp256r1>, MyPerfReport), Error> {
     let (delivery, listening, sending) = join_computation(
         sender,
         receiver,
@@ -87,9 +90,9 @@ pub async fn pre_sign(
     listening.abort();
 
     let report = profiler.get_report().context("get perf report")?;
-    println!("Presign {}", report.display_io(false));
+    // println!("Presign {}", report);
 
-    Ok(output)
+    Ok((output, MyPerfReport(report)))
 }
 
 pub async fn load_pre_sign(filename: String) -> Result<Presignature<Secp256r1>, Error> {
