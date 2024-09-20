@@ -34,6 +34,7 @@ use cggmp21::{ supported_curves::Secp256r1, PartialSignature, generic_ec::Secret
 use crate::protocol::{ key_export, key_import, sign };
 use rand::Rng; // Add this import for generating random values
 use uuid::Uuid;
+use log::info;
 pub mod kmn_poc_client {
     tonic::include_proto!("kmn_poc_client"); // The string specified here must match the proto package name
 
@@ -76,7 +77,7 @@ impl KeyManagementService for ClientServer {
         request: Request<AssignKeyRequest>
     ) -> Result<Response<AssignKeyResponse>, Status> {
         let req = request.into_inner();
-        println!("Received AssignKey request: {:?}", req);
+        info!("Received AssignKey request: {:?}", req);
 
         let id = req.id;
         let mut keys = self.keys.lock().await;
@@ -93,7 +94,7 @@ impl KeyManagementService for ClientServer {
 
             Ok(Response::new(response))
         } else {
-            println!("No free key found, attempting to generate a new key...");
+            info!("No free key found, attempting to generate a new key...");
 
             // If no free key is found, attempt to generate a new key
             let room_id = rand::thread_rng().gen();
@@ -140,7 +141,7 @@ impl KeyManagementService for ClientServer {
         request: Request<SignOnlineRequest>
     ) -> Result<Response<SignOnlineResponse>, Status> {
         let req = request.into_inner();
-        println!("Received Online Sign request: {:?}", req);
+        info!("Received Online Sign request: {:?}", req);
 
         // Generate a random i32 for room_id
         let room_id = rand::thread_rng().gen();
@@ -189,7 +190,7 @@ impl KeyManagementService for ClientServer {
         request: Request<GenerateKeyRequest>
     ) -> Result<Response<GenerateKeyResponse>, Status> {
         let req = request.into_inner();
-        println!("Received Generate Key request: {:?}", req);
+        info!("Received Generate Key request: {:?}", req);
 
         // Generate a random i32 for room_id
         let room_id = rand::thread_rng().gen();
@@ -227,7 +228,7 @@ impl KeyManagementService for ClientServer {
 
     async fn sign(&self, request: Request<SignRequest>) -> Result<Response<SignResponse>, Status> {
         let req = request.into_inner();
-        println!("Received Sign request: {:?}", req);
+        info!("Received Sign request: {:?}", req);
 
         let node_req = kmn_poc::SignRequest {
             msg: req.msg.clone(),
@@ -268,7 +269,7 @@ impl KeyManagementService for ClientServer {
                 Ok(Response::new(response))
             }
             Err(_) => {
-                println!("Sign request failed, attempting sign_online...");
+                info!("Sign request failed, attempting sign_online...");
 
                 // Try the sign_online if the regular sign fails
                 let node_req_online = kmn_poc::SignOnlineRequest {
@@ -310,7 +311,7 @@ impl KeyManagementService for ClientServer {
         request: Request<ExportKeyRequest>
     ) -> Result<Response<ExportKeyResponse>, Status> {
         let req = request.into_inner();
-        println!("Received ExportKey request: {:?}", req);
+        info!("Received ExportKey request: {:?}", req);
         let node_req = kmn_poc::GetKeyRequest {
             key_id: req.key_id,
         };
@@ -346,7 +347,7 @@ impl KeyManagementService for ClientServer {
         request: Request<KeyUpdateRequest>
     ) -> Result<Response<KeyUpdateResponse>, Status> {
         let req = request.into_inner();
-        println!("Received KeyUpdate request: {:?}", req);
+        info!("Received KeyUpdate request: {:?}", req);
         let key: SecretScalar<Secp256r1> = serde_json::from_str(&req.key).unwrap();
 
         let keys = key_import
@@ -357,7 +358,7 @@ impl KeyManagementService for ClientServer {
         let new_uuid = Uuid::new_v4().to_string();
         for (i, client) in self.clients.iter().enumerate() {
             let key_share = serde_json::to_string(&keys.get(i).unwrap()).unwrap();
-            println!("{:?}", key_share);
+            info!("{:?}", key_share);
             let node_req = kmn_poc::KeyUpdateRequest {
                 new_key_id: new_uuid.clone(),
                 key_id: req.key_id.clone(),
@@ -388,7 +389,7 @@ impl KeyManagementService for ClientServer {
         request: Request<CombinePublicKeysRequest>
     ) -> Result<Response<CombinePublicKeysResponse>, Status> {
         let req = request.into_inner();
-        println!("Received CombinePublicKeys request: {:?}", req);
+        info!("Received CombinePublicKeys request: {:?}", req);
         let pk_1: Point<Secp256r1> = serde_json::from_str(&req.pub_key).unwrap();
         let node_req = kmn_poc::GetKeyRequest {
             key_id: req.key_id.clone(),
@@ -421,7 +422,7 @@ pub async fn start_client_server(
     // Initialize the ClientServer with the updated keys_map
     let client_server = ClientServer::new(keys_map, urls).await?;
 
-    println!("Client Server listening on {}", addr);
+    info!("Client Server listening on {}", addr);
 
     let reflection_service = tonic_reflection::server::Builder
         ::configure()

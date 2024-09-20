@@ -19,7 +19,7 @@ use kmn_poc::{
     GenerateKeyResponse,
     KeyInfo,
 };
-
+use log::info;
 use crate::database::database::establish_connection;
 use crate::database::models::{ Key, PreSignature };
 use crate::network::node::Node;
@@ -46,7 +46,7 @@ pub struct NodeServer {}
 impl KeyManagement for NodeServer {
     async fn sign(&self, request: Request<SignRequest>) -> Result<Response<SignResponse>, Status> {
         let req = request.into_inner();
-        println!("Received Partial Sign request: {:?}", req);
+        info!("Received Partial Sign request: {:?}", req);
 
         let msg = req.msg;
         let key_id = req.key_id;
@@ -107,7 +107,7 @@ impl KeyManagement for NodeServer {
         request: Request<SignOnlineRequest>
     ) -> Result<Response<SignOnlineResponse>, Status> {
         let req = request.into_inner();
-        println!("Received Online Sign request: {:?}", req);
+        info!("Received Online Sign request: {:?}", req);
         let (connection_tx, mut connection_rx) = unbounded_channel();
         let index = get_index();
         let room_id = req.room_id;
@@ -161,7 +161,7 @@ impl KeyManagement for NodeServer {
         request: Request<GenerateKeyRequest>
     ) -> Result<Response<GenerateKeyResponse>, Status> {
         let req = request.into_inner();
-        println!("Received Generate Key request: {:?}", req);
+        info!("Received Generate Key request: {:?}", req);
         let (connection_tx, mut connection_rx) = unbounded_channel();
         let index = get_index();
         let room_id = req.room_id;
@@ -212,7 +212,7 @@ impl KeyManagement for NodeServer {
         request: Request<GetKeysRequest>
     ) -> Result<Response<GetKeysResponse>, Status> {
         let req = request.into_inner();
-        println!("Received GetKeys request: {:?}", req);
+        info!("Received GetKeys request: {:?}", req);
 
         // Establish database connection
         let connection = &mut establish_connection(get_database_url().to_string());
@@ -246,7 +246,7 @@ impl KeyManagement for NodeServer {
         request: Request<GetKeyRequest>
     ) -> Result<Response<GetKeyResponse>, Status> {
         let req = request.into_inner();
-        println!("Received GetKey request: {:?}", req);
+        info!("Received GetKey request: {:?}", req);
         // Establish database connection
         let connection = &mut establish_connection(get_database_url().to_string());
 
@@ -271,7 +271,7 @@ impl KeyManagement for NodeServer {
         request: Request<KeyUpdateRequest>
     ) -> Result<Response<KeyUpdateResponse>, Status> {
         let req = request.into_inner();
-        println!("Received KeyUpdate request: {:?}", req);
+        info!("Received KeyUpdate request: {:?}", req);
         let connection = &mut establish_connection(get_database_url().to_string());
 
         let key_id = req.key_id;
@@ -398,7 +398,7 @@ pub async fn start_node_server(
 
     let _ = node_task.await?;
 
-    println!("NodeServer listening on {}", addr);
+    info!("NodeServer listening on {}", addr);
 
     let reflection_service = tonic_reflection::server::Builder
         ::configure()

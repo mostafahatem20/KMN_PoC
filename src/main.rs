@@ -27,31 +27,37 @@ use kmn_poc::{
 };
 use std::fs::OpenOptions;
 use num_cpus;
-use std::io::Write;
 use tokio::fs;
+use env_logger::{ Builder, Target };
+use log::{ error, info };
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     // Open log file for writing logs
     let args: Vec<String> = env::args().collect();
-    let log_file_name = format!("application_errors_{}.log", args[1..].join("_").replace("/", "_"));
-    let mut log_file = OpenOptions::new().append(true).create(true).open(&log_file_name)?;
+    let log_file_name = format!("application_{}.log", args[1..].join("_").replace("/", "_"));
+    let log_file = OpenOptions::new().append(true).create(true).open(&log_file_name)?;
+
+    // Configure env_logger to log everything to the file
+    Builder::new()
+        .target(Target::Pipe(Box::new(log_file)))
+        .filter(None, log::LevelFilter::Info)
+        .init();
 
     // Log application start
-    writeln!(log_file, "Starting application with args: {:?}", args).unwrap();
+    info!("Starting application with args: {:?}", args);
 
-    if let Err(err) = actual_main(args, &mut log_file).await {
-        writeln!(log_file, "Error: {:?}", err).unwrap();
-        println!("An error occurred: {:?}", err); // You can still print to console
+    if let Err(err) = actual_main(args).await {
+        error!("An error occurred: {:?}", err); // You can still print to console
     } else {
-        writeln!(log_file, "Application completed successfully").unwrap();
+        info!("Application completed successfully");
     }
 
     Ok(())
 }
 
-async fn actual_main(args: Vec<String>, log_file: &mut std::fs::File) -> Result<(), Error> {
-    writeln!(log_file, "Entered actual_main").unwrap();
+async fn actual_main(args: Vec<String>) -> Result<(), Error> {
+    info!("Entered actual_main");
 
     if
         args.len() < 4 ||
@@ -61,7 +67,7 @@ async fn actual_main(args: Vec<String>, log_file: &mut std::fs::File) -> Result<
             args[3] == "AUX_TEST" ||
             args[3] == "KEY_GEN_TEST") && args.len() != 5)
     {
-        writeln!(log_file, "Invalid number of arguments").unwrap();
+        error!("Invalid number of arguments");
         return Err(anyhow!("Invalid number of arguments"));
     }
 
@@ -76,27 +82,21 @@ async fn actual_main(args: Vec<String>, log_file: &mut std::fs::File) -> Result<
     let database_url = create_postgres_url(&config);
     let topic = setup_config.topic;
 
-    writeln!(
-        log_file,
-        "Operation: {}, Index: {}, Number of parties: {}",
-        operation,
-        index,
-        number_of_parties
-    ).unwrap();
+    info!("Operation: {}, Index: {}, Number of parties: {}", operation, index, number_of_parties);
 
     set_database_url(database_url.clone());
     set_index(index);
 
     let connection = &mut establish_connection(database_url.clone());
     if let Err(err) = create_tables_if_not_exists(connection) {
-        writeln!(log_file, "Failed to create table: {}", err).unwrap();
+        error!("Failed to create table: {}", err);
         return Err(anyhow!("Failed to create table: {}", err));
     }
 
     match operation.as_str() {
         "KEY_GEN" => {
             let number_of_keys: usize = args[4].parse()?;
-            writeln!(log_file, "Starting KEY_GEN with {} keys", number_of_keys).unwrap();
+            info!("Starting KEY_GEN with {} keys", number_of_keys);
             let _ = generate_keys(
                 number_of_keys,
                 index,
@@ -106,16 +106,12 @@ async fn actual_main(args: Vec<String>, log_file: &mut std::fs::File) -> Result<
             ).await?;
         }
         "PRE_SIGN" => {
-            writeln!(log_file, "Starting PRE_SIGN").unwrap();
+            info!("Starting PRE_SIGN");
             let _ = generate_pre_signatures(index, threshold, topic).await?;
         }
         "PRE_SIGN_TEST" => {
             let number_of_iterations: usize = args[4].parse()?;
-            writeln!(
-                log_file,
-                "Starting PRE_SIGN_TEST with {} iterations",
-                number_of_iterations
-            ).unwrap();
+            info!("Starting PRE_SIGN_TEST with {} iterations", number_of_iterations);
             let _ = generate_pre_signatures_with_one_key(
                 number_of_iterations,
                 index,
@@ -126,11 +122,7 @@ async fn actual_main(args: Vec<String>, log_file: &mut std::fs::File) -> Result<
         }
         "SIGN_TEST" => {
             let number_of_iterations: usize = args[4].parse()?;
-            writeln!(
-                log_file,
-                "Starting SIGN_TEST with {} iterations",
-                number_of_iterations
-            ).unwrap();
+            info!("Starting SIGN_TEST with {} iterations", number_of_iterations);
             let _ = generate_signatures_with_one_key(
                 number_of_iterations,
                 index,
@@ -141,32 +133,27 @@ async fn actual_main(args: Vec<String>, log_file: &mut std::fs::File) -> Result<
         }
         "AUX_TEST" => {
             let number_of_iterations: usize = args[4].parse()?;
-            writeln!(
-                log_file,
-                "Starting AUX_TEST with {} iterations",
-                number_of_iterations
-            ).unwrap();
+            info!("Starting AUX_TEST with {} iterations", number_of_iterations);
             let _ = generate_aux_info(number_of_iterations, index, number_of_parties, topic).await?;
         }
         "KEY_GEN_TEST" => {
             let number_of_keys: usize = args[4].parse()?;
-            writeln!(log_file, "Starting KEY_GEN_TEST with {} keys", number_of_keys).unwrap();
+            info!("Starting KEY_GEN_TEST with {} keys", number_of_keys);
             let _ = generate_keys_test(
                 number_of_keys,
                 index,
                 threshold,
                 number_of_parties,
-                topic,
-                log_file
+                topic
             ).await?;
         }
         _ => {
-            writeln!(log_file, "Invalid operation: {}", operation).unwrap();
+            info!("Invalid operation: {}", operation);
             return Err(anyhow!("Invalid operation: {}", operation));
         }
     }
 
-    writeln!(log_file, "Exiting actual_main").unwrap();
+    info!("Exiting actual_main");
     Ok(())
 }
 
@@ -337,31 +324,25 @@ pub async fn generate_keys_test(
     index: usize,
     threshold: usize,
     number_of_parties: usize,
-    topic: String,
-    log_file: &mut std::fs::File
+    topic: String
 ) -> Result<(), Error> {
     let (connection_tx, mut connection_rx) = unbounded_channel();
 
     let mut node = Node::new(index, Some(connection_tx), number_of_parties, topic.clone())?;
-    writeln!(
-        log_file,
-        "Node initialized with index: {}, number_of_parties: {}",
-        index,
-        number_of_parties
-    ).unwrap();
+    info!("Node initialized with index: {}, number_of_parties: {}", index, number_of_parties);
 
     // Include the original iteration number with each receiver and sender pair
     let mut receiver_senders_keygen: Vec<_> = (0..number_of_keys)
         .map(|i| (i, node.add_receiver_sender(i))) // Store the iteration index along with (receiver, sender)
         .collect();
-    writeln!(log_file, "Generated receiver-sender pairs for {} keys", number_of_keys).unwrap();
+    info!("Generated receiver-sender pairs for {} keys", number_of_keys);
 
     // Spawn the node task
     let node_task = tokio::spawn(async move { node.run().await });
 
     // Wait for the node to initialize
     connection_rx.recv().await;
-    writeln!(log_file, "Node initialized and ready").unwrap();
+    info!("Node initialized and ready");
 
     let mut reports = Vec::new(); // Collect reports from all batches
 
@@ -375,21 +356,12 @@ pub async fn generate_keys_test(
         chunks.push(chunk);
     }
 
-    writeln!(
-        log_file,
-        "Split receiver-sender pairs into {} chunks for processing",
-        chunks.len()
-    ).unwrap();
+    info!("Split receiver-sender pairs into {} chunks for processing", chunks.len());
 
     let mut batch_index = 0;
     // Process tasks in batches based on the number of available CPUs
     for chunk in chunks {
-        writeln!(
-            log_file,
-            "Processing batch {} with {} tasks",
-            batch_index + 1,
-            chunk.len()
-        ).unwrap();
+        info!("Processing batch {} with {} tasks", batch_index + 1, chunk.len());
         batch_index += 1;
         let mut batch_tasks = Vec::new();
 
@@ -430,12 +402,12 @@ pub async fn generate_keys_test(
     let json_reports = serde_json::to_string_pretty(&reports).unwrap();
     let filename = format!("keygen_reports_test_{}.json", index); // Include the task index in the filename
     tokio::fs::write(filename.clone(), json_reports).await?;
-    writeln!(log_file, "Reports written to file: {}", filename.clone()).unwrap();
+    info!("Reports written to file: {}", filename.clone());
 
     let _ = node_task.await?;
-    writeln!(log_file, "Node task completed").unwrap();
+    info!("Node task completed");
 
-    writeln!(log_file, "generate_keys_test completed successfully").unwrap();
+    info!("generate_keys_test completed successfully");
     Ok(())
 }
 

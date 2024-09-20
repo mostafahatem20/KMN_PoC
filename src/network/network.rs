@@ -8,6 +8,7 @@ use super::{
 use anyhow::Error;
 use cggmp21::round_based::{ Incoming, MessageDestination, Outgoing };
 use futures::{ channel::mpsc, StreamExt };
+use log::info;
 use serde::{ de::DeserializeOwned, Serialize };
 use tokio::task::JoinHandle;
 
@@ -59,7 +60,7 @@ async fn send<M>(
             MessageDestination::OneParty(id) => (MessageType::P2P, id),
         };
 
-        println!(
+        info!(
             "msg to be sent room {:?}, msg id: {:?}, receiver: {:?}, msg type {:?}",
             room_id,
             outgoing.msg.id,

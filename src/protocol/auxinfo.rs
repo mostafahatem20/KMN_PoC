@@ -7,6 +7,7 @@ use crate::{
     utils::utils::MyPerfReport,
 };
 use anyhow::anyhow;
+use log::info;
 
 pub async fn run(
     sender: NodeSender,
@@ -40,7 +41,7 @@ pub async fn run(
     listening.abort();
 
     let report = profiler.get_report().context("get perf report")?;
-    println!("Aux Info {}", report);
+    info!("Aux Info {}", report);
 
     Ok((output, MyPerfReport(report)))
 }

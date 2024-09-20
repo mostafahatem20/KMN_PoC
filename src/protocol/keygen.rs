@@ -10,6 +10,7 @@ use rand::rngs::OsRng;
 use anyhow::anyhow;
 use crate::network::{ network::join_computation, node::{ NodeReceiver, NodeSender } };
 use crate::utils::utils::MyPerfReport;
+use log::info;
 
 pub async fn run(
     sender: NodeSender,
@@ -44,7 +45,7 @@ pub async fn run(
     listening.abort();
 
     let report = profiler.get_report().context("get perf report")?;
-    println!("Key Generation {}", report);
+    info!("Key Generation {}", report);
 
     Ok((output, MyPerfReport(report)))
 }

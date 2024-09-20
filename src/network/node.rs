@@ -22,7 +22,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{ Hash, Hasher };
 
 use crate::utils::utils::all_unique;
-
+use log::{ error, info };
 #[derive(Debug, serde::Serialize, serde::Deserialize, Eq, PartialEq, Clone)]
 pub enum MessageType {
     /// Message was broadcasted
@@ -216,7 +216,7 @@ impl Node {
                             serde_json::to_vec(&node_info).unwrap()
                         )
                 {
-                    println!("Publish error: {e:?}");
+                    info!("Publish error: {e:?}");
                 }
                 self.peers_connected = peers_connected;
             }
@@ -268,7 +268,7 @@ impl Node {
                         SwarmEvent::Behaviour(MyBehaviourEvent::RequestResponse(request_response::Event::Message { peer: _peer, message })) => {
                             match message{
                                 request_response::Message::Request { request_id: _request_id, request, channel } => {
-                                    println!("Received request room {:?}, msg id {:?}, sender {:?}", request.room_id, request.request.id, request.request.sender);
+                                    info!("Received request room {:?}, msg id {:?}, sender {:?}", request.room_id, request.request.id, request.request.sender);
                                     let msg_id = request.request.id;
                                     self.senders.get_mut(&request.room_id).unwrap().send(request.request)?;
                                     let response = Response {
@@ -278,12 +278,12 @@ impl Node {
                                     
                                     if let Err(e) = self.swarm.behaviour_mut().request_response.send_response(channel, response) {
                                         // Handle the error gracefully
-                                        eprintln!("Failed to send response: {:?}", e);
+                                        error!("Failed to send response: {:?}", e);
                                         // You might also want to take some recovery actions here
                                     }
                                 },
                                 request_response::Message::Response { request_id: _request_id, response } => {
-                                    println!("Received response room {:?}, msg id {:?}", response.room_id, response.msg_id);
+                                    info!("Received response room {:?}, msg id {:?}", response.room_id, response.msg_id);
                                     pending_requests.remove(&(response.msg_id, response.room_id));
                                 },
                             }
@@ -307,13 +307,13 @@ impl Node {
                         SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Received { info: _info, .. })) => {
                         }
                         SwarmEvent::NewListenAddr { address, .. } => {
-                            println!("Listening on {:?}", address)
+                            info!("Listening on {:?}", address)
                         },
                         SwarmEvent::ConnectionEstablished { peer_id, .. } => {
-                            println!("Connection Established {:?}", peer_id);
+                            info!("Connection Established {:?}", peer_id);
                         },
                         SwarmEvent::ConnectionClosed { peer_id, .. } => {
-                            println!("Connection Closed {:?}", peer_id);
+                            info!("Connection Closed {:?}", peer_id);
                         }
                         _ => {}
                  },
@@ -325,7 +325,7 @@ impl Node {
                     })).fuse() => {
                     match request {
                         ((room_id, Some(request)), _, _) => {
-                            println!(
+                            info!(
                                 "local room {:?} msg to be sent (Node) remote room {:?}, msg id: {:?}, receiver: {:?}, msg type {:?}",
                                 room_id,
                                 request.room_id,
@@ -377,7 +377,7 @@ impl Node {
                         SwarmEvent::Behaviour(MyBehaviourEvent::RequestResponse(request_response::Event::Message { peer: _peer, message })) => {
                             match message{
                                 request_response::Message::Request { request_id: _request_id, request, channel } => {
-                                    println!("Received request room {:?}, msg id {:?}, sender {:?}", request.room_id, request.request.id, request.request.sender);
+                                    info!("Received request room {:?}, msg id {:?}, sender {:?}", request.room_id, request.request.id, request.request.sender);
                                     let msg_id = request.request.id;
                                     self.senders.get_mut(&request.room_id).unwrap().send(request.request)?;
                                     let response = Response {
@@ -411,20 +411,20 @@ impl Node {
                         SwarmEvent::Behaviour(MyBehaviourEvent::Identify(identify::Event::Received { info: _info, .. })) => {
                         }
                         SwarmEvent::NewListenAddr { address, .. } => {
-                            println!("Listening on {:?}", address)
+                            info!("Listening on {:?}", address)
                         },
                         SwarmEvent::ConnectionEstablished { peer_id, .. } => {
-                            println!("Connection Established {:?}", peer_id);
+                            info!("Connection Established {:?}", peer_id);
                         },
                         SwarmEvent::ConnectionClosed { peer_id, .. } => {
-                            println!("Connection Closed {:?}", peer_id);
+                            info!("Connection Closed {:?}", peer_id);
                         }
                         _ => {}
                  }
                 }
             }
         }
-        println!("node done");
+        info!("node done");
         Ok(())
     }
 }
@@ -449,7 +449,7 @@ impl NodeReceiver {
                 rpc_message = self.from_worker.recv() => match rpc_message {
                     // Inbound requests
                     Some(request) => {
-                        println!("Received msg in room {:?}, msg id {:?}", room_id, request.id);
+                        info!("Received msg in room {:?}, msg id {:?}", room_id, request.id);
                         let msg = serde_json::from_slice::<M>(&request.msg).context("failed to deserialize Msg")?;
                         let incoming = Incoming {
                             id: request.id,
