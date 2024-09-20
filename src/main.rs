@@ -52,8 +52,11 @@ async fn actual_main(args: Vec<String>) -> Result<(), Error> {
     // Wrap the main code and return errors, so they can be logged
     if
         args.len() < 4 ||
-        ((args[3] == "KEY_GEN" || args[3] == "PRE_SIGN_TEST" || args[3] == "SIGN_TEST") &&
-            args.len() != 5)
+        ((args[3] == "KEY_GEN" ||
+            args[3] == "PRE_SIGN_TEST" ||
+            args[3] == "SIGN_TEST" ||
+            args[3] == "AUX_TEST" ||
+            args[3] == "KEY_GEN_TEST") && args.len() != 5)
     {
         return Err(anyhow!("Invalid number of arguments"));
     }
@@ -67,7 +70,9 @@ async fn actual_main(args: Vec<String>) -> Result<(), Error> {
         operation != "KEY_GEN" &&
         operation != "PRE_SIGN" &&
         operation != "PRE_SIGN_TEST" &&
-        operation != "SIGN_TEST"
+        operation != "SIGN_TEST" &&
+        operation != "AUX_TEST" &&
+        operation != "KEY_GEN_TEST"
     {
         return Err(anyhow!("Invalid operation: {}", operation));
     }
@@ -111,10 +116,100 @@ async fn actual_main(args: Vec<String>) -> Result<(), Error> {
             number_of_parties,
             topic
         ).await?;
+    } else if operation == "AUX_TEST" {
+        let number_of_iterations: usize = args[4].parse()?;
+        let _ = generate_aux_info(number_of_iterations, index, number_of_parties, topic).await?;
+    } else if operation == "KEY_GEN_TEST" {
+        let number_of_keys: usize = args[4].parse()?;
+        let _ = generate_keys_test(
+            number_of_keys,
+            index,
+            threshold,
+            number_of_parties,
+            topic
+        ).await?;
     }
 
     Ok(())
 }
+pub async fn generate_aux_info(
+    number_of_iterations: usize,
+    index: usize,
+    number_of_parties: usize,
+    topic: String
+) -> Result<(), Error> {
+    let (connection_tx, mut connection_rx) = unbounded_channel();
+
+    let mut node = Node::new(index, Some(connection_tx), number_of_parties, topic.clone())?;
+
+    // Include the original iteration number with each receiver and sender pair
+    let mut receiver_senders_auxinfo: Vec<_> = (0..number_of_iterations)
+        .map(|i| (i, node.add_receiver_sender(i))) // Store the iteration index along with (receiver, sender)
+        .collect();
+
+    // Spawn the node task
+    let node_task = tokio::spawn(async move { node.run().await });
+
+    // Wait for the node to initialize
+    connection_rx.recv().await;
+
+    let mut reports = Vec::new(); // Collect reports from all batches
+
+    let mut chunks: Vec<Vec<(usize, (NodeReceiver, NodeSender))>> = Vec::new();
+
+    // Move chunks out of the original vector using drain and preserve iteration numbers
+    while !receiver_senders_auxinfo.is_empty() {
+        let chunk: Vec<(usize, (NodeReceiver, NodeSender))> = receiver_senders_auxinfo
+            .drain(..num_cpus::get().min(receiver_senders_auxinfo.len()))
+            .collect();
+        chunks.push(chunk);
+    }
+    // Process tasks in batches based on the number of available CPUs
+    for chunk in chunks {
+        let mut batch_tasks = Vec::new();
+
+        // Use into_iter() to move (original_iteration, (receiver, sender)) out of the chunk
+        for (original_iteration, (receiver, sender)) in chunk.into_iter() {
+            // Move receiver and sender into the async task and pass the original_iteration
+            let auxinfo_task = tokio::spawn(async move {
+                let eid = generate_eid(original_iteration); // Use the original_iteration to generate EID
+                let (_, report) = auxinfo
+                    ::run(
+                        sender, // Moved sender
+                        receiver, // Moved receiver
+                        index as u16,
+                        number_of_parties as u16,
+                        &eid,
+                        original_iteration // Pass original iteration to pre_sign
+                    ).await
+                    .unwrap();
+
+                report // Return the report for this task
+            });
+
+            batch_tasks.push(auxinfo_task);
+        }
+
+        // Wait for all tasks in the current batch to complete
+        let batch_reports: Vec<_> = join_all(batch_tasks).await
+            .into_iter()
+            .map(|res| res.unwrap()) // Unwrap the result to get the report
+            .collect();
+
+        // Collect reports from the current batch
+        reports.extend(batch_reports);
+    }
+
+    // Serialize reports to JSON and write to a file
+    let json_reports = serde_json::to_string_pretty(&reports).unwrap();
+    let filename = format!("aux_info_reports_test_{}.json", index); // Include the task index in the filename
+    tokio::fs::write(filename, json_reports).await?;
+
+    let _ = node_task.await?;
+
+    Ok(())
+}
+
 pub async fn generate_keys(
     number_of_keys: usize,
     index: usize,
@@ -138,7 +233,7 @@ pub async fn generate_keys(
     // Spawn auxinfo task
     let auxinfo_task = tokio::spawn(async move {
         let eid: [u8; 32] = [0u8; 32];
-        let data = auxinfo
+        let (data, _) = auxinfo
             ::run(sender1, receiver1, index as u16, number_of_parties as u16, &eid, 0).await
             .unwrap();
         set_aux_info(&data);
@@ -195,6 +290,86 @@ pub async fn generate_keys(
     let filename = format!("keygen_reports_{}.json", index); // Include the task index in the filename
 
     fs::write(filename, json_reports).await?;
+
+    Ok(())
+}
+
+pub async fn generate_keys_test(
+    number_of_keys: usize,
+    index: usize,
+    threshold: usize,
+    number_of_parties: usize,
+    topic: String
+) -> Result<(), Error> {
+    let (connection_tx, mut connection_rx) = unbounded_channel();
+
+    let mut node = Node::new(index, Some(connection_tx), number_of_parties, topic.clone())?;
+
+    // Include the original iteration number with each receiver and sender pair
+    let mut receiver_senders_keygen: Vec<_> = (0..number_of_keys)
+        .map(|i| (i, node.add_receiver_sender(i))) // Store the iteration index along with (receiver, sender)
+        .collect();
+
+    // Spawn the node task
+    let node_task = tokio::spawn(async move { node.run().await });
+
+    // Wait for the node to initialize
+    connection_rx.recv().await;
+
+    let mut reports = Vec::new(); // Collect reports from all batches
+
+    let mut chunks: Vec<Vec<(usize, (NodeReceiver, NodeSender))>> = Vec::new();
+
+    // Move chunks out of the original vector using drain and preserve iteration numbers
+    while !receiver_senders_keygen.is_empty() {
+        let chunk: Vec<(usize, (NodeReceiver, NodeSender))> = receiver_senders_keygen
+            .drain(..num_cpus::get().min(receiver_senders_keygen.len()))
+            .collect();
+        chunks.push(chunk);
+    }
+    // Process tasks in batches based on the number of available CPUs
+    for chunk in chunks {
+        let mut batch_tasks = Vec::new();
+
+        // Use into_iter() to move (original_iteration, (receiver, sender)) out of the chunk
+        for (original_iteration, (receiver, sender)) in chunk.into_iter() {
+            // Move receiver and sender into the async task and pass the original_iteration
+            let auxinfo_task = tokio::spawn(async move {
+                let eid = generate_eid(original_iteration); // Use the original_iteration to generate EID
+                let (_, report) = keygen
+                    ::run(
+                        sender, // Moved sender
+                        receiver, // Moved receiver
+                        index as u16,
+                        threshold as u16,
+                        number_of_parties as u16,
+                        &eid,
+                        original_iteration // Pass original iteration to pre_sign
+                    ).await
+                    .unwrap();
+
+                report // Return the report for this task
+            });
+
+            batch_tasks.push(auxinfo_task);
+        }
+
+        // Wait for all tasks in the current batch to complete
+        let batch_reports: Vec<_> = join_all(batch_tasks).await
+            .into_iter()
+            .map(|res| res.unwrap()) // Unwrap the result to get the report
+            .collect();
+
+        // Collect reports from the current batch
+        reports.extend(batch_reports);
+    }
+
+    // Serialize reports to JSON and write to a file
+    let json_reports = serde_json::to_string_pretty(&reports).unwrap();
+    let filename = format!("keygen_reports_test_{}.json", index); // Include the task index in the filename
+    tokio::fs::write(filename, json_reports).await?;
+
+    let _ = node_task.await?;
 
     Ok(())
 }
@@ -313,7 +488,7 @@ pub async fn generate_key(
     // Spawn auxinfo task
     let auxinfo_task = tokio::spawn(async move {
         let eid: [u8; 32] = [0u8; 32];
-        let data = auxinfo
+        let (data, _) = auxinfo
             ::run(sender1, receiver1, index as u16, number_of_parties as u16, &eid, 0).await
             .unwrap();
         data

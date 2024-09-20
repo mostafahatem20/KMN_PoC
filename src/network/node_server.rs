@@ -387,7 +387,7 @@ pub async fn start_node_server(
     // Spawn auxinfo task
     let auxinfo_task = tokio::spawn(async move {
         let eid: [u8; 32] = [0u8; 32];
-        let data = auxinfo
+        let (data, _) = auxinfo
             ::run(sender1, receiver1, index as u16, number_of_parties as u16, &eid, 0).await
             .unwrap();
         set_aux_info(&data);

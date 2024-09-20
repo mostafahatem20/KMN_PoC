@@ -2,7 +2,10 @@ use anyhow::{ Context, Error };
 use cggmp21::{ key_share::AuxInfo, progress::PerfProfiler, round_based::MpcParty, ExecutionId };
 use rand::rngs::OsRng;
 
-use crate::network::{ network::join_computation, node::{ NodeReceiver, NodeSender } };
+use crate::{
+    network::{ network::join_computation, node::{ NodeReceiver, NodeSender } },
+    utils::utils::MyPerfReport,
+};
 use anyhow::anyhow;
 
 pub async fn run(
@@ -12,7 +15,7 @@ pub async fn run(
     number_of_parties: u16,
     eid: &[u8],
     room_id: usize
-) -> Result<AuxInfo, Error> {
+) -> Result<(AuxInfo, MyPerfReport), Error> {
     let (delivery, listening, sending) = join_computation(
         sender,
         receiver,
@@ -37,9 +40,9 @@ pub async fn run(
     listening.abort();
 
     let report = profiler.get_report().context("get perf report")?;
-    println!("Aux Info {}", report.display_io(false));
+    println!("Aux Info {}", report);
 
-    Ok(output)
+    Ok((output, MyPerfReport(report)))
 }
 
 pub async fn load(filename: String) -> Result<AuxInfo, Error> {
