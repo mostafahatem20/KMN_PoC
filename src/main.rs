@@ -32,24 +32,27 @@ use tokio::fs;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-    // Initialize logging to log errors to a file
+    // Open log file for writing logs
     let args: Vec<String> = env::args().collect();
     let log_file_name = format!("application_errors_{}.log", args[1..].join("_").replace("/", "_"));
-    println!("{:?}", log_file_name);
     let mut log_file = OpenOptions::new().append(true).create(true).open(&log_file_name)?;
 
-    if let Err(err) = actual_main(args).await {
+    // Log application start
+    writeln!(log_file, "Starting application with args: {:?}", args).unwrap();
+
+    if let Err(err) = actual_main(args, &mut log_file).await {
         writeln!(log_file, "Error: {:?}", err).unwrap();
-        println!("An error occurred: {:?}", err);
-        return Ok(());
+        println!("An error occurred: {:?}", err); // You can still print to console
+    } else {
+        writeln!(log_file, "Application completed successfully").unwrap();
     }
 
     Ok(())
 }
 
-async fn actual_main(args: Vec<String>) -> Result<(), Error> {
-    // Your existing main logic goes here
-    // Wrap the main code and return errors, so they can be logged
+async fn actual_main(args: Vec<String>, log_file: &mut std::fs::File) -> Result<(), Error> {
+    writeln!(log_file, "Entered actual_main").unwrap();
+
     if
         args.len() < 4 ||
         ((args[3] == "KEY_GEN" ||
@@ -58,25 +61,13 @@ async fn actual_main(args: Vec<String>) -> Result<(), Error> {
             args[3] == "AUX_TEST" ||
             args[3] == "KEY_GEN_TEST") && args.len() != 5)
     {
+        writeln!(log_file, "Invalid number of arguments").unwrap();
         return Err(anyhow!("Invalid number of arguments"));
     }
 
     let setup_path = args[1].clone();
     let path = args[2].clone();
     let operation = args[3].clone();
-
-    // Validate the operation
-    if
-        operation != "KEY_GEN" &&
-        operation != "PRE_SIGN" &&
-        operation != "PRE_SIGN_TEST" &&
-        operation != "SIGN_TEST" &&
-        operation != "AUX_TEST" &&
-        operation != "KEY_GEN_TEST"
-    {
-        return Err(anyhow!("Invalid operation: {}", operation));
-    }
-
     let config = config::read_config(&path)?;
     let setup_config = config::read_setup_config(&setup_path)?;
     let threshold = setup_config.threshold;
@@ -85,53 +76,100 @@ async fn actual_main(args: Vec<String>) -> Result<(), Error> {
     let database_url = create_postgres_url(&config);
     let topic = setup_config.topic;
 
+    writeln!(
+        log_file,
+        "Operation: {}, Index: {}, Number of parties: {}",
+        operation,
+        index,
+        number_of_parties
+    ).unwrap();
+
     set_database_url(database_url.clone());
     set_index(index);
 
     let connection = &mut establish_connection(database_url.clone());
     if let Err(err) = create_tables_if_not_exists(connection) {
+        writeln!(log_file, "Failed to create table: {}", err).unwrap();
         return Err(anyhow!("Failed to create table: {}", err));
     }
 
-    if operation == "KEY_GEN" {
-        let number_of_keys: usize = args[4].parse()?;
-        let _ = generate_keys(number_of_keys, index, threshold, number_of_parties, topic).await?;
-    } else if operation == "PRE_SIGN" {
-        let _ = generate_pre_signatures(index, threshold, topic).await?;
-    } else if operation == "PRE_SIGN_TEST" {
-        let number_of_iterations: usize = args[4].parse()?;
-        let _ = generate_pre_signatures_with_one_key(
-            number_of_iterations,
-            index,
-            threshold,
-            number_of_parties,
-            topic
-        ).await?;
-    } else if operation == "SIGN_TEST" {
-        let number_of_iterations: usize = args[4].parse()?;
-        let _ = generate_signatures_with_one_key(
-            number_of_iterations,
-            index,
-            threshold,
-            number_of_parties,
-            topic
-        ).await?;
-    } else if operation == "AUX_TEST" {
-        let number_of_iterations: usize = args[4].parse()?;
-        let _ = generate_aux_info(number_of_iterations, index, number_of_parties, topic).await?;
-    } else if operation == "KEY_GEN_TEST" {
-        let number_of_keys: usize = args[4].parse()?;
-        let _ = generate_keys_test(
-            number_of_keys,
-            index,
-            threshold,
-            number_of_parties,
-            topic
-        ).await?;
+    match operation.as_str() {
+        "KEY_GEN" => {
+            let number_of_keys: usize = args[4].parse()?;
+            writeln!(log_file, "Starting KEY_GEN with {} keys", number_of_keys).unwrap();
+            let _ = generate_keys(
+                number_of_keys,
+                index,
+                threshold,
+                number_of_parties,
+                topic
+            ).await?;
+        }
+        "PRE_SIGN" => {
+            writeln!(log_file, "Starting PRE_SIGN").unwrap();
+            let _ = generate_pre_signatures(index, threshold, topic).await?;
+        }
+        "PRE_SIGN_TEST" => {
+            let number_of_iterations: usize = args[4].parse()?;
+            writeln!(
+                log_file,
+                "Starting PRE_SIGN_TEST with {} iterations",
+                number_of_iterations
+            ).unwrap();
+            let _ = generate_pre_signatures_with_one_key(
+                number_of_iterations,
+                index,
+                threshold,
+                number_of_parties,
+                topic
+            ).await?;
+        }
+        "SIGN_TEST" => {
+            let number_of_iterations: usize = args[4].parse()?;
+            writeln!(
+                log_file,
+                "Starting SIGN_TEST with {} iterations",
+                number_of_iterations
+            ).unwrap();
+            let _ = generate_signatures_with_one_key(
+                number_of_iterations,
+                index,
+                threshold,
+                number_of_parties,
+                topic
+            ).await?;
+        }
+        "AUX_TEST" => {
+            let number_of_iterations: usize = args[4].parse()?;
+            writeln!(
+                log_file,
+                "Starting AUX_TEST with {} iterations",
+                number_of_iterations
+            ).unwrap();
+            let _ = generate_aux_info(number_of_iterations, index, number_of_parties, topic).await?;
+        }
+        "KEY_GEN_TEST" => {
+            let number_of_keys: usize = args[4].parse()?;
+            writeln!(log_file, "Starting KEY_GEN_TEST with {} keys", number_of_keys).unwrap();
+            let _ = generate_keys_test(
+                number_of_keys,
+                index,
+                threshold,
+                number_of_parties,
+                topic,
+                log_file
+            ).await?;
+        }
+        _ => {
+            writeln!(log_file, "Invalid operation: {}", operation).unwrap();
+            return Err(anyhow!("Invalid operation: {}", operation));
+        }
     }
 
+    writeln!(log_file, "Exiting actual_main").unwrap();
     Ok(())
 }
+
 pub async fn generate_aux_info(
     number_of_iterations: usize,
     index: usize,
@@ -299,22 +337,31 @@ pub async fn generate_keys_test(
     index: usize,
     threshold: usize,
     number_of_parties: usize,
-    topic: String
+    topic: String,
+    log_file: &mut std::fs::File
 ) -> Result<(), Error> {
     let (connection_tx, mut connection_rx) = unbounded_channel();
 
     let mut node = Node::new(index, Some(connection_tx), number_of_parties, topic.clone())?;
+    writeln!(
+        log_file,
+        "Node initialized with index: {}, number_of_parties: {}",
+        index,
+        number_of_parties
+    ).unwrap();
 
     // Include the original iteration number with each receiver and sender pair
     let mut receiver_senders_keygen: Vec<_> = (0..number_of_keys)
         .map(|i| (i, node.add_receiver_sender(i))) // Store the iteration index along with (receiver, sender)
         .collect();
+    writeln!(log_file, "Generated receiver-sender pairs for {} keys", number_of_keys).unwrap();
 
     // Spawn the node task
     let node_task = tokio::spawn(async move { node.run().await });
 
     // Wait for the node to initialize
     connection_rx.recv().await;
+    writeln!(log_file, "Node initialized and ready").unwrap();
 
     let mut reports = Vec::new(); // Collect reports from all batches
 
@@ -327,8 +374,23 @@ pub async fn generate_keys_test(
             .collect();
         chunks.push(chunk);
     }
+
+    writeln!(
+        log_file,
+        "Split receiver-sender pairs into {} chunks for processing",
+        chunks.len()
+    ).unwrap();
+
+    let mut batch_index = 0;
     // Process tasks in batches based on the number of available CPUs
     for chunk in chunks {
+        writeln!(
+            log_file,
+            "Processing batch {} with {} tasks",
+            batch_index + 1,
+            chunk.len()
+        ).unwrap();
+        batch_index += 1;
         let mut batch_tasks = Vec::new();
 
         // Use into_iter() to move (original_iteration, (receiver, sender)) out of the chunk
@@ -367,10 +429,13 @@ pub async fn generate_keys_test(
     // Serialize reports to JSON and write to a file
     let json_reports = serde_json::to_string_pretty(&reports).unwrap();
     let filename = format!("keygen_reports_test_{}.json", index); // Include the task index in the filename
-    tokio::fs::write(filename, json_reports).await?;
+    tokio::fs::write(filename.clone(), json_reports).await?;
+    writeln!(log_file, "Reports written to file: {}", filename.clone()).unwrap();
 
     let _ = node_task.await?;
+    writeln!(log_file, "Node task completed").unwrap();
 
+    writeln!(log_file, "generate_keys_test completed successfully").unwrap();
     Ok(())
 }
 
