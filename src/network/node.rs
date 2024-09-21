@@ -1,4 +1,4 @@
-use std::{ collections::{ HashMap, HashSet }, time::Duration };
+use std::{ collections::HashMap, time::Duration };
 use cggmp21::round_based::{ Incoming, MessageType as DfnsMessageType, MsgId, PartyIndex };
 use futures::{ channel::mpsc::{ self }, FutureExt, SinkExt, StreamExt };
 use libp2p::{
@@ -192,7 +192,6 @@ impl Node {
     }
     pub async fn run(mut self) -> Result<(), Error> {
         let mut room_id_to_remove: Option<usize> = None;
-        let mut pending_requests: HashSet<(MsgId, usize)> = HashSet::new();
 
         loop {
             let peers_connected = self.swarm
@@ -247,9 +246,8 @@ impl Node {
                 .collect();
 
             info!("Receivers {:?}", receiver_futures.len());
-            info!("Pending Requests {:?}", pending_requests);
 
-            if receiver_futures.is_empty() && pending_requests.is_empty() {
+            if receiver_futures.is_empty() {
                 break;
             }
 
@@ -287,7 +285,6 @@ impl Node {
                                 },
                                 request_response::Message::Response { request_id: _request_id, response } => {
                                     info!("Received response room {:?}, msg id {:?}", response.room_id, response.msg_id);
-                                    pending_requests.remove(&(response.msg_id, response.room_id));
                                 },
                             }
                         }
@@ -340,7 +337,6 @@ impl Node {
                             let peers: Vec<_> = self.sorted_peers.clone();
                             if request.request.msg_type == MessageType::Broadcast {
                                 for peer_id in peers {
-                                    pending_requests.insert((request.request.id, request.room_id));
                                     behaviour.request_response.send_request(&peer_id, RequestWithReceiver{
                                         room_id: request.room_id,
                                         request: request.request.clone()
@@ -387,10 +383,15 @@ impl Node {
                                         msg_id,
                                         room_id: request.room_id
                                     };
-                                    self.swarm.behaviour_mut().request_response.send_response(channel, response).unwrap();
+                                    
+                                    if let Err(e) = self.swarm.behaviour_mut().request_response.send_response(channel, response) {
+                                        // Handle the error gracefully
+                                        error!("Failed to send response: {:?}", e);
+                                        // You might also want to take some recovery actions here
+                                    }
                                 },
                                 request_response::Message::Response { request_id: _request_id, response } => {
-                                    pending_requests.remove(&(response.msg_id, response.room_id));
+                                    info!("Received response room {:?}, msg id {:?}", response.room_id, response.msg_id);
                                 },
                             }
                         }
@@ -399,10 +400,9 @@ impl Node {
                             message_id: _id,
                             message,
                         })) => {
-                            let peer_info: NodeInfo = serde_json::from_slice(&message.data).unwrap();
-                            self.sorted_peers[peer_info.index] = peer_info.peer_id;
-                        }
-                            
+                           let peer_info: NodeInfo = serde_json::from_slice(&message.data).unwrap();
+                           self.sorted_peers[peer_info.index] = peer_info.peer_id;
+                        } 
                         SwarmEvent::Behaviour(MyBehaviourEvent::RequestResponse(request_response::Event::ResponseSent { peer: _peer, request_id:_request_id })) => {
                         }
                         SwarmEvent::Behaviour(MyBehaviourEvent::RequestResponse(request_response::Event::InboundFailure { peer: _peer, request_id: _request_id, error: _error })) => {
@@ -423,7 +423,7 @@ impl Node {
                             info!("Connection Closed {:?}", peer_id);
                         }
                         _ => {}
-                 }
+                 },
                 }
             }
         }
