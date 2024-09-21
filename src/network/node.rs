@@ -249,7 +249,7 @@ impl Node {
             info!("Receivers {:?}", receiver_futures.len());
             info!("Pending Requests {:?}", pending_requests);
 
-            if receiver_futures.is_empty() {
+            if receiver_futures.is_empty() && pending_requests.is_empty() {
                 break;
             }
 

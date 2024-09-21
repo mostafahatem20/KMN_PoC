@@ -26,7 +26,7 @@ use kmn_poc::{
     },
 };
 use std::fs::OpenOptions;
-use num_cpus;
+// use num_cpus;
 use tokio::fs;
 use env_logger::{ Builder, Target };
 use log::{ error, info };
@@ -60,12 +60,12 @@ async fn actual_main(args: Vec<String>) -> Result<(), Error> {
     info!("Entered actual_main");
 
     if
-        args.len() < 4 ||
+        args.len() < 5 ||
         ((args[3] == "KEY_GEN" ||
             args[3] == "PRE_SIGN_TEST" ||
             args[3] == "SIGN_TEST" ||
             args[3] == "AUX_TEST" ||
-            args[3] == "KEY_GEN_TEST") && args.len() != 5)
+            args[3] == "KEY_GEN_TEST") && args.len() != 6)
     {
         error!("Invalid number of arguments");
         return Err(anyhow!("Invalid number of arguments"));
@@ -96,55 +96,71 @@ async fn actual_main(args: Vec<String>) -> Result<(), Error> {
     match operation.as_str() {
         "KEY_GEN" => {
             let number_of_keys: usize = args[4].parse()?;
+            let threads: usize = args[5].parse()?;
             info!("Starting KEY_GEN with {} keys", number_of_keys);
             let _ = generate_keys(
                 number_of_keys,
                 index,
                 threshold,
                 number_of_parties,
-                topic
+                topic,
+                threads
             ).await?;
         }
         "PRE_SIGN" => {
             info!("Starting PRE_SIGN");
-            let _ = generate_pre_signatures(index, threshold, topic).await?;
+            let threads: usize = args[4].parse()?;
+            let _ = generate_pre_signatures(index, threshold, topic, threads).await?;
         }
         "PRE_SIGN_TEST" => {
             let number_of_iterations: usize = args[4].parse()?;
+            let threads: usize = args[5].parse()?;
             info!("Starting PRE_SIGN_TEST with {} iterations", number_of_iterations);
             let _ = generate_pre_signatures_with_one_key(
                 number_of_iterations,
                 index,
                 threshold,
                 number_of_parties,
-                topic
+                topic,
+                threads
             ).await?;
         }
         "SIGN_TEST" => {
             let number_of_iterations: usize = args[4].parse()?;
+            let threads: usize = args[5].parse()?;
             info!("Starting SIGN_TEST with {} iterations", number_of_iterations);
             let _ = generate_signatures_with_one_key(
                 number_of_iterations,
                 index,
                 threshold,
                 number_of_parties,
-                topic
+                topic,
+                threads
             ).await?;
         }
         "AUX_TEST" => {
             let number_of_iterations: usize = args[4].parse()?;
+            let threads: usize = args[5].parse()?;
             info!("Starting AUX_TEST with {} iterations", number_of_iterations);
-            let _ = generate_aux_info(number_of_iterations, index, number_of_parties, topic).await?;
+            let _ = generate_aux_info(
+                number_of_iterations,
+                index,
+                number_of_parties,
+                topic,
+                threads
+            ).await?;
         }
         "KEY_GEN_TEST" => {
             let number_of_keys: usize = args[4].parse()?;
+            let threads: usize = args[5].parse()?;
             info!("Starting KEY_GEN_TEST with {} keys", number_of_keys);
             let _ = generate_keys_test(
                 number_of_keys,
                 index,
                 threshold,
                 number_of_parties,
-                topic
+                topic,
+                threads
             ).await?;
         }
         _ => {
@@ -161,7 +177,8 @@ pub async fn generate_aux_info(
     number_of_iterations: usize,
     index: usize,
     number_of_parties: usize,
-    topic: String
+    topic: String,
+    threads: usize
 ) -> Result<(), Error> {
     let (connection_tx, mut connection_rx) = unbounded_channel();
 
@@ -185,7 +202,7 @@ pub async fn generate_aux_info(
     // Move chunks out of the original vector using drain and preserve iteration numbers
     while !receiver_senders_auxinfo.is_empty() {
         let chunk: Vec<(usize, (NodeReceiver, NodeSender))> = receiver_senders_auxinfo
-            .drain(..num_cpus::get().min(receiver_senders_auxinfo.len()))
+            .drain(..threads.min(receiver_senders_auxinfo.len()))
             .collect();
         chunks.push(chunk);
     }
@@ -240,7 +257,8 @@ pub async fn generate_keys(
     index: usize,
     threshold: usize,
     number_of_parties: usize,
-    topic: String
+    topic: String,
+    threads: usize
 ) -> Result<(), Error> {
     // Initialize the node
     let (connection_tx, mut connection_rx) = unbounded_channel();
@@ -268,7 +286,7 @@ pub async fn generate_keys(
     let _ = auxinfo_task.await?;
 
     let mut keygen_tasks = Vec::new();
-    let semaphore = Arc::new(Semaphore::new(num_cpus::get()));
+    let semaphore = Arc::new(Semaphore::new(threads));
     let aux_info = auxinfo::load_from_string(get_aux_info().to_string()).unwrap();
 
     for (iteration, (receiver2, sender2)) in receiver_senders_keygen.into_iter().enumerate() {
@@ -324,7 +342,8 @@ pub async fn generate_keys_test(
     index: usize,
     threshold: usize,
     number_of_parties: usize,
-    topic: String
+    topic: String,
+    threads: usize
 ) -> Result<(), Error> {
     let (connection_tx, mut connection_rx) = unbounded_channel();
 
@@ -351,7 +370,7 @@ pub async fn generate_keys_test(
     // Move chunks out of the original vector using drain and preserve iteration numbers
     while !receiver_senders_keygen.is_empty() {
         let chunk: Vec<(usize, (NodeReceiver, NodeSender))> = receiver_senders_keygen
-            .drain(..num_cpus::get().min(receiver_senders_keygen.len()))
+            .drain(..threads.min(receiver_senders_keygen.len()))
             .collect();
         chunks.push(chunk);
     }
@@ -414,7 +433,8 @@ pub async fn generate_keys_test(
 pub async fn generate_pre_signatures(
     index: usize,
     threshold: usize,
-    topic: String
+    topic: String,
+    threads: usize
 ) -> Result<(), Error> {
     let database_url = get_database_url().to_string();
     let conn = &mut establish_connection(database_url);
@@ -435,7 +455,7 @@ pub async fn generate_pre_signatures(
     connection_rx.recv().await;
 
     // Set up the semaphore to limit concurrent tasks
-    let semaphore = Arc::new(Semaphore::new(num_cpus::get()));
+    let semaphore = Arc::new(Semaphore::new(threads));
     let mut presign_tasks = Vec::new();
 
     for (iteration, (receiver, sender)) in receiver_senders_presign.into_iter().enumerate() {
@@ -562,7 +582,8 @@ pub async fn generate_pre_signatures_with_one_key(
     index: usize,
     threshold: usize,
     number_of_parties: usize,
-    topic: String
+    topic: String,
+    threads: usize
 ) -> Result<(), Error> {
     let key_share = generate_key(index, threshold, number_of_parties).await?;
     let signers = generate_array_u16(threshold);
@@ -590,7 +611,7 @@ pub async fn generate_pre_signatures_with_one_key(
         // Move chunks out of the original vector using drain and preserve iteration numbers
         while !receiver_senders_presign.is_empty() {
             let chunk: Vec<(usize, (NodeReceiver, NodeSender))> = receiver_senders_presign
-                .drain(..num_cpus::get().min(receiver_senders_presign.len()))
+                .drain(..threads.min(receiver_senders_presign.len()))
                 .collect();
             chunks.push(chunk);
         }
@@ -651,7 +672,8 @@ pub async fn generate_signatures_with_one_key(
     index: usize,
     threshold: usize,
     number_of_parties: usize,
-    topic: String
+    topic: String,
+    threads: usize
 ) -> Result<(), Error> {
     let message: &[u8] = b"Hello, world! This is a random message in byte array format.";
     // Initialize the node
@@ -681,7 +703,7 @@ pub async fn generate_signatures_with_one_key(
         // Move chunks out of the original vector using drain and preserve iteration numbers
         while !receiver_senders_sign.is_empty() {
             let chunk: Vec<(usize, (NodeReceiver, NodeSender))> = receiver_senders_sign
-                .drain(..num_cpus::get().min(receiver_senders_sign.len()))
+                .drain(..threads.min(receiver_senders_sign.len()))
                 .collect();
             chunks.push(chunk);
         }
