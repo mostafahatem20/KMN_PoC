@@ -27,7 +27,6 @@ use kmn_poc::{
 };
 use std::fs::OpenOptions;
 // use num_cpus;
-use tokio::fs;
 use env_logger::{ Builder, Target };
 use log::{ error, info };
 
@@ -63,9 +62,9 @@ async fn actual_main(args: Vec<String>) -> Result<(), Error> {
         args.len() < 5 ||
         ((args[3] == "KEY_GEN" ||
             args[3] == "PRE_SIGN_TEST" ||
-            args[3] == "SIGN_TEST" ||
             args[3] == "AUX_TEST" ||
-            args[3] == "KEY_GEN_TEST") && args.len() != 6)
+            args[3] == "KEY_GEN_TEST") && args.len() != 6) ||
+        (args[3] == "SIGN_TEST" && args.len() != 7)
     {
         error!("Invalid number of arguments");
         return Err(anyhow!("Invalid number of arguments"));
@@ -128,6 +127,7 @@ async fn actual_main(args: Vec<String>) -> Result<(), Error> {
         "SIGN_TEST" => {
             let number_of_iterations: usize = args[4].parse()?;
             let threads: usize = args[5].parse()?;
+            let msg_len: usize = args[6].parse()?;
             info!("Starting SIGN_TEST with {} iterations", number_of_iterations);
             let _ = generate_signatures_with_one_key(
                 number_of_iterations,
@@ -135,7 +135,8 @@ async fn actual_main(args: Vec<String>) -> Result<(), Error> {
                 threshold,
                 number_of_parties,
                 topic,
-                threads
+                threads,
+                msg_len
             ).await?;
         }
         "AUX_TEST" => {
@@ -243,9 +244,15 @@ pub async fn generate_aux_info(
     }
 
     // Serialize reports to JSON and write to a file
-    let json_reports = serde_json::to_string_pretty(&reports).unwrap();
-    let filename = format!("aux_info_reports_test_{}.json", index); // Include the task index in the filename
-    tokio::fs::write(filename, json_reports).await?;
+    let output =
+        serde_json::json!({
+        "number_of_nodes": number_of_parties,
+        "reports": reports
+    });
+
+    let filename = format!("aux_info_reports_test_{}.json", index);
+    let json_output = serde_json::to_string_pretty(&output).unwrap();
+    tokio::fs::write(filename, json_output).await?;
 
     let _ = node_task.await?;
 
@@ -327,12 +334,18 @@ pub async fn generate_keys(
         .map(|res| res.unwrap()) // Unwrap the result to get the report
         .collect();
 
+    let output =
+        serde_json::json!({
+            "number_of_nodes": number_of_parties,
+            "threshold": threshold,
+            "reports": reports
+        });
+
+    let filename = format!("keygen_reports_{}.json", index);
+    let json_output = serde_json::to_string_pretty(&output).unwrap();
+    tokio::fs::write(filename, json_output).await?;
+
     let _ = node_task.await?;
-
-    let json_reports = serde_json::to_string_pretty(&reports).unwrap();
-    let filename = format!("keygen_reports_{}.json", index); // Include the task index in the filename
-
-    fs::write(filename, json_reports).await?;
 
     Ok(())
 }
@@ -417,10 +430,16 @@ pub async fn generate_keys_test(
         reports.extend(batch_reports);
     }
 
-    // Serialize reports to JSON and write to a file
-    let json_reports = serde_json::to_string_pretty(&reports).unwrap();
-    let filename = format!("keygen_reports_test_{}.json", index); // Include the task index in the filename
-    tokio::fs::write(filename.clone(), json_reports).await?;
+    let output =
+        serde_json::json!({
+        "number_of_nodes": number_of_parties,
+        "threshold": threshold,
+        "reports": reports
+    });
+
+    let filename = format!("keygen_reports_test_{}.json", index);
+    let json_output = serde_json::to_string_pretty(&output).unwrap();
+    tokio::fs::write(filename.clone(), json_output).await?;
     info!("Reports written to file: {}", filename.clone());
 
     let _ = node_task.await?;
@@ -510,13 +529,16 @@ pub async fn generate_pre_signatures(
         .filter_map(|res| res.unwrap()) // Unwrap the result and filter out None values
         .collect();
 
-    // Serialize reports to JSON and write to a file
-    let json_reports = serde_json::to_string_pretty(&reports).unwrap();
-    let filename = format!("presignature_reports_{}.json", index); // Include the task index in the filename
+    let output =
+        serde_json::json!({
+            "threshold": threshold,
+            "reports": reports
+        });
 
-    tokio::fs::write(filename, json_reports).await?;
+    let filename = format!("presignature_reports_{}.json", index);
+    let json_output = serde_json::to_string_pretty(&output).unwrap();
+    tokio::fs::write(filename, json_output).await?;
 
-    // Wait for the node task to complete
     let _ = node_task.await?;
 
     Ok(())
@@ -656,10 +678,16 @@ pub async fn generate_pre_signatures_with_one_key(
             reports.extend(batch_reports);
         }
 
-        // Serialize reports to JSON and write to a file
-        let json_reports = serde_json::to_string_pretty(&reports).unwrap();
+        let output =
+            serde_json::json!({
+        "number_of_nodes": number_of_parties,
+        "threshold": threshold,
+        "reports": reports
+    });
+
         let filename = format!("presignature_reports_test_{}.json", index); // Include the task index in the filename
-        tokio::fs::write(filename, json_reports).await?;
+        let json_output = serde_json::to_string_pretty(&output).unwrap();
+        tokio::fs::write(filename, json_output).await?;
 
         let _ = node_task.await?;
     }
@@ -673,9 +701,10 @@ pub async fn generate_signatures_with_one_key(
     threshold: usize,
     number_of_parties: usize,
     topic: String,
-    threads: usize
+    threads: usize,
+    msg_len: usize
 ) -> Result<(), Error> {
-    let message: &[u8] = b"Hello, world! This is a random message in byte array format.";
+    let message: Vec<u8> = vec![b'a'; msg_len];
     // Initialize the node
     let key_share = generate_key(index, threshold, number_of_parties).await?;
     let signers = generate_array_u16(threshold);
@@ -716,7 +745,7 @@ pub async fn generate_signatures_with_one_key(
             for (original_iteration, (receiver, sender)) in chunk.into_iter() {
                 let key_share_clone = key_share.clone();
                 let signers_clone = signers.clone();
-
+                let message_clone = message.clone();
                 // Move receiver and sender into the async task and pass the original_iteration
                 let sign_task = tokio::spawn(async move {
                     let eid = generate_eid(original_iteration); // Use the original_iteration to generate EID
@@ -727,7 +756,7 @@ pub async fn generate_signatures_with_one_key(
                             index as u16,
                             key_share_clone,
                             &signers_clone,
-                            message,
+                            &message_clone,
                             &eid,
                             original_iteration // Pass original iteration to pre_sign
                         ).await
@@ -749,10 +778,19 @@ pub async fn generate_signatures_with_one_key(
             reports.extend(batch_reports);
         }
 
-        // Serialize reports to JSON and write to a file
-        let json_reports = serde_json::to_string_pretty(&reports).unwrap();
-        let filename = format!("signature_reports_{}.json", index); // Include the task index in the filename
-        tokio::fs::write(filename, json_reports).await?;
+        // Include the parameters in the JSON output
+        let output =
+            serde_json::json!({
+        "number_of_nodes": number_of_parties,
+        "threshold": threshold,
+        "msg_len": msg_len,
+        "reports": reports
+    });
+
+        // Write the output to a JSON file
+        let filename = format!("signature_reports_{}.json", index);
+        let json_output = serde_json::to_string_pretty(&output).unwrap();
+        tokio::fs::write(filename, json_output).await?;
 
         let _ = node_task.await?;
     }
