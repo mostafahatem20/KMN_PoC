@@ -53,6 +53,7 @@ pub struct Request {
 pub struct Response {
     pub msg_id: MsgId,
     pub room_id: usize,
+    pub peer_id: PeerId,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -192,6 +193,7 @@ impl Node {
     }
     pub async fn run(mut self) -> Result<(), Error> {
         let mut room_id_to_remove: Option<usize> = None;
+        let mut pending_requests: Vec<(PeerId, MsgId, usize)> = Vec::new();
 
         loop {
             let peers_connected = self.swarm
@@ -246,8 +248,9 @@ impl Node {
                 .collect();
 
             info!("Receivers {:?}", receiver_futures.len());
+            info!("Pending Requests {:?}", pending_requests);
 
-            if receiver_futures.is_empty() {
+            if receiver_futures.is_empty() && pending_requests.is_empty() {
                 break;
             }
 
@@ -274,7 +277,8 @@ impl Node {
                                     self.senders.get_mut(&request.room_id).unwrap().send(request.request)?;
                                     let response = Response {
                                         msg_id,
-                                        room_id: request.room_id
+                                        room_id: request.room_id,
+                                        peer_id: self.swarm.local_peer_id().clone()
                                     };
                                     
                                     if let Err(e) = self.swarm.behaviour_mut().request_response.send_response(channel, response) {
@@ -284,7 +288,11 @@ impl Node {
                                     }
                                 },
                                 request_response::Message::Response { request_id: _request_id, response } => {
-                                    info!("Received response room {:?}, msg id {:?}", response.room_id, response.msg_id);
+                                    info!("Received response peer_id {:?} msg id {:?}, room {:?}",  response.peer_id, response.msg_id, response.room_id);
+                                    // Find the position of the first occurrence of (msg_id, room_id)
+                                    if let Some(pos) = pending_requests.iter().position(|x| *x == (response.peer_id, response.msg_id, response.room_id)) {
+                                        pending_requests.remove(pos); // Remove the first match
+                                    }
                                 },
                             }
                         }
@@ -336,14 +344,18 @@ impl Node {
                             let behaviour = self.swarm.behaviour_mut();
                             let peers: Vec<_> = self.sorted_peers.clone();
                             if request.request.msg_type == MessageType::Broadcast {
-                                for peer_id in peers {
-                                    behaviour.request_response.send_request(&peer_id, RequestWithReceiver{
+                                for (i, peer_id) in peers.iter().enumerate() {
+                                    if i != self.party_index {
+                                    pending_requests.push((peer_id.clone(), request.request.id, request.room_id));
+                                    behaviour.request_response.send_request(peer_id, RequestWithReceiver{
                                         room_id: request.room_id,
                                         request: request.request.clone()
                                     });
                                 }
+                                }
                             } else {
                                 if let Some(peer_id) = self.sorted_peers.get(request.index as usize) {
+                                    pending_requests.push((peer_id.clone(), request.request.id, request.room_id));
                                     behaviour.request_response.send_request(peer_id, RequestWithReceiver{
                                         room_id: request.room_id,
                                         request: request.request.clone()
@@ -381,7 +393,8 @@ impl Node {
                                     self.senders.get_mut(&request.room_id).unwrap().send(request.request)?;
                                     let response = Response {
                                         msg_id,
-                                        room_id: request.room_id
+                                        room_id: request.room_id,
+                                        peer_id: self.swarm.local_peer_id().clone()
                                     };
                                     
                                     if let Err(e) = self.swarm.behaviour_mut().request_response.send_response(channel, response) {
@@ -392,6 +405,10 @@ impl Node {
                                 },
                                 request_response::Message::Response { request_id: _request_id, response } => {
                                     info!("Received response room {:?}, msg id {:?}", response.room_id, response.msg_id);
+                                    // Find the position of the first occurrence of (msg_id, room_id)
+                                    if let Some(pos) = pending_requests.iter().position(|x| *x == (response.peer_id, response.msg_id, response.room_id)) {
+                                        pending_requests.remove(pos); // Remove the first match
+                                    }
                                 },
                             }
                         }
