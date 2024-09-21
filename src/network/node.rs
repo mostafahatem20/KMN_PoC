@@ -17,7 +17,12 @@ use libp2p::{
 };
 use anyhow::{ Error, Context };
 use serde::{ de::DeserializeOwned, Serialize };
-use tokio::{ io, select, sync::mpsc::{ unbounded_channel, UnboundedReceiver, UnboundedSender } };
+use tokio::{
+    io,
+    select,
+    sync::mpsc::{ unbounded_channel, UnboundedReceiver, UnboundedSender },
+    time::sleep,
+};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{ Hash, Hasher };
 
@@ -251,6 +256,7 @@ impl Node {
             info!("Pending Requests {:?}", pending_requests);
 
             if receiver_futures.is_empty() && pending_requests.is_empty() {
+                sleep(Duration::from_millis(100)).await;
                 break;
             }
 
@@ -404,7 +410,7 @@ impl Node {
                                     }
                                 },
                                 request_response::Message::Response { request_id: _request_id, response } => {
-                                    info!("Received response room {:?}, msg id {:?}", response.room_id, response.msg_id);
+                                    info!("Received response peer_id {:?} msg id {:?}, room {:?}",  response.peer_id, response.msg_id, response.room_id);
                                     // Find the position of the first occurrence of (msg_id, room_id)
                                     if let Some(pos) = pending_requests.iter().position(|x| *x == (response.peer_id, response.msg_id, response.room_id)) {
                                         pending_requests.remove(pos); // Remove the first match
