@@ -86,10 +86,12 @@ async fn actual_main(args: Vec<String>) -> Result<(), Error> {
     set_database_url(database_url.clone());
     set_index(index);
 
-    let connection = &mut establish_connection(database_url.clone());
-    if let Err(err) = create_tables_if_not_exists(connection) {
-        error!("Failed to create table: {}", err);
-        return Err(anyhow!("Failed to create table: {}", err));
+    if operation == "KEY_GEN" || operation == "PRE_SIGN" {
+        let connection = &mut establish_connection(database_url.clone());
+        if let Err(err) = create_tables_if_not_exists(connection) {
+            error!("Failed to create table: {}", err);
+            return Err(anyhow!("Failed to create table: {}", err));
+        }
     }
 
     match operation.as_str() {
