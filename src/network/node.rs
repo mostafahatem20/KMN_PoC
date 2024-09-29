@@ -206,6 +206,7 @@ impl Node {
                 .gossipsub.all_peers()
                 .filter(|(_, topics)| topics.contains(&&self.consensus_topic.hash()))
                 .count();
+            info!("peers {:?}, self {:?}", peers_connected, self.peers_connected);
             if
                 peers_connected == self.number_of_parties - 1 &&
                 peers_connected != self.peers_connected
