@@ -214,6 +214,7 @@ impl Node {
                     index: self.party_index,
                     peer_id: self.swarm.local_peer_id().clone(),
                 };
+                info!("Publish index and id");
                 if
                     let Err(e) = self.swarm
                         .behaviour_mut()
@@ -308,6 +309,7 @@ impl Node {
                             message,
                         })) => {
                            let peer_info: NodeInfo = serde_json::from_slice(&message.data).unwrap();
+                           info!("Received publish {:?}", peer_info);
                            self.sorted_peers[peer_info.index] = peer_info.peer_id;
                         } 
                         SwarmEvent::Behaviour(MyBehaviourEvent::RequestResponse(request_response::Event::ResponseSent { peer: _peer, request_id:_request_id })) => {
@@ -424,6 +426,7 @@ impl Node {
                             message,
                         })) => {
                            let peer_info: NodeInfo = serde_json::from_slice(&message.data).unwrap();
+                           info!("Received publish {:?}", peer_info);
                            self.sorted_peers[peer_info.index] = peer_info.peer_id;
                         } 
                         SwarmEvent::Behaviour(MyBehaviourEvent::RequestResponse(request_response::Event::ResponseSent { peer: _peer, request_id:_request_id })) => {
