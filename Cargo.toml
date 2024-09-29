@@ -12,7 +12,7 @@ serde = { version = "1.0.204", features = ["derive"] }
 serde_json = "1.0.120"
 sha2 = "0.10.8"
 tokio = { version = "1.38.1", features = ["full"] }
-libp2p = { version = "0.53.2", features = ["request-response", "noise", "tcp", "yamux", "mdns", "tokio", "macros", "json", "gossipsub", "serde", "identify"] }
+libp2p = { version = "0.53.2", features = ["request-response", "noise", "tcp", "yamux", "mdns", "tokio", "macros", "json", "gossipsub", "serde", "identify", "floodsub"] }
 toml = "0.8.19"
 tonic = "0.12.1"
 prost = "0.13.1"

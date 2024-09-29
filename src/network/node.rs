@@ -12,19 +12,16 @@ use libp2p::{
     PeerId,
     StreamProtocol,
     Swarm,
-    gossipsub,
+    floodsub,
     identify,
 };
 use anyhow::{ Error, Context };
 use serde::{ de::DeserializeOwned, Serialize };
 use tokio::{
-    io,
     select,
     sync::mpsc::{ unbounded_channel, UnboundedReceiver, UnboundedSender },
     time::sleep,
 };
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{ Hash, Hasher };
 
 use crate::utils::utils::all_unique;
 use log::{ error, info };
@@ -69,7 +66,7 @@ pub struct NodeInfo {
 
 #[derive(NetworkBehaviour)]
 struct MyBehaviour {
-    gossipsub: gossipsub::Behaviour,
+    floodsub: floodsub::Floodsub,
     mdns: mdns::tokio::Behaviour,
     request_response: request_response::json::Behaviour<RequestWithReceiver, Response>,
     identify: identify::Behaviour,
@@ -85,7 +82,8 @@ pub struct Node {
     number_of_parties: usize,
     peers_connected: usize,
     sorted_peers: Vec<PeerId>,
-    consensus_topic: gossipsub::IdentTopic,
+    topic_subscribers: HashMap<floodsub::Topic, usize>,
+    consensus_topic: floodsub::Topic,
     swarm: Swarm<MyBehaviour>,
     receivers: HashMap<usize, UnboundedReceiver<NodeRequest>>,
     senders: HashMap<usize, UnboundedSender<Request>>,
@@ -113,27 +111,8 @@ impl Node {
             .with_tokio()
             .with_tcp(tcp::Config::default(), noise::Config::new, yamux::Config::default)?
             .with_behaviour(|key| {
-                // To content-address message, we can take the hash of message and use it as an ID.
-                let message_id_fn = |message: &gossipsub::Message| {
-                    let mut s = DefaultHasher::new();
-                    message.data.hash(&mut s);
-                    gossipsub::MessageId::from(s.finish().to_string())
-                };
-
-                // Set a custom gossipsub configuration
-                let gossipsub_config = gossipsub::ConfigBuilder
-                    ::default()
-                    .heartbeat_interval(Duration::from_secs(10)) // This is set to aid debugging by not cluttering the log space
-                    .validation_mode(gossipsub::ValidationMode::Strict) // This sets the kind of message validation. The default is Strict (enforce message signing)
-                    .message_id_fn(message_id_fn) // content-address messages. No two messages of the same content will be propagated.
-                    .build()
-                    .map_err(|msg| io::Error::new(io::ErrorKind::Other, msg))?; // Temporary hack because `build` does not return a proper `std::error::Error`.
-
                 // build a gossipsub network behaviour
-                let gossipsub = gossipsub::Behaviour::new(
-                    gossipsub::MessageAuthenticity::Signed(key.clone()),
-                    gossipsub_config
-                )?;
+                let floodsub = floodsub::Floodsub::new(key.public().to_peer_id());
 
                 let mdns_config = mdns::Config {
                     query_interval: Duration::from_secs(2), // Increase frequency
@@ -150,15 +129,15 @@ impl Node {
                 let identify = identify::Behaviour::new(
                     identify::Config::new("/ipfs/id/1.0.0".to_string(), key.public())
                 );
-                Ok(MyBehaviour { mdns, request_response, gossipsub, identify })
+                Ok(MyBehaviour { mdns, request_response, floodsub, identify })
             })?
             .with_swarm_config(|c| c.with_idle_connection_timeout(Duration::from_secs(60)))
             .build();
 
         // Create a Gossipsub topic
-        let topic = gossipsub::IdentTopic::new(topic);
+        let topic = floodsub::Topic::new(topic);
         // subscribes to our topic
-        swarm.behaviour_mut().gossipsub.subscribe(&topic)?;
+        swarm.behaviour_mut().floodsub.subscribe(topic.clone());
 
         swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
 
@@ -171,6 +150,7 @@ impl Node {
             sorted_peers,
             consensus_topic: topic.clone(),
             peer_addresses: HashMap::new(),
+            topic_subscribers: HashMap::new(),
             swarm,
             receivers: HashMap::new(),
             senders: HashMap::new(),
@@ -201,12 +181,13 @@ impl Node {
         let mut pending_requests: Vec<(PeerId, MsgId, usize)> = Vec::new();
 
         loop {
-            let peers_connected = self.swarm
-                .behaviour_mut()
-                .gossipsub.all_peers()
-                .filter(|(_, topics)| topics.contains(&&self.consensus_topic.hash()))
-                .count();
-            info!("peers {:?}, self {:?}", peers_connected, self.peers_connected);
+            let peers_connected = *self.topic_subscribers.get(&self.consensus_topic).unwrap_or(&0);
+            info!(
+                "p {:?}, n {:?}, s {:?}",
+                peers_connected,
+                self.number_of_parties,
+                self.peers_connected
+            );
             if
                 peers_connected == self.number_of_parties - 1 &&
                 peers_connected != self.peers_connected
@@ -216,16 +197,12 @@ impl Node {
                     peer_id: self.swarm.local_peer_id().clone(),
                 };
                 info!("Publish index and id");
-                if
-                    let Err(e) = self.swarm
-                        .behaviour_mut()
-                        .gossipsub.publish(
-                            self.consensus_topic.clone(),
-                            serde_json::to_vec(&node_info).unwrap()
-                        )
-                {
-                    info!("Publish error: {e:?}");
-                }
+                self.swarm
+                    .behaviour_mut()
+                    .floodsub.publish(
+                        self.consensus_topic.clone(),
+                        serde_json::to_vec(&node_info).unwrap()
+                    );
                 self.peers_connected = peers_connected;
             }
             let is_sorted_peers_unique = all_unique(&self.sorted_peers);
@@ -268,13 +245,13 @@ impl Node {
                         SwarmEvent::Behaviour(MyBehaviourEvent::Mdns(mdns::Event::Discovered(list))) => {
                             for (peer_id, multiaddr) in list {
                                 self.peer_addresses.entry(peer_id).or_insert_with(Vec::new).push(multiaddr.clone());
-                                self.swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
+                                self.swarm.behaviour_mut().floodsub.add_node_to_partial_view(peer_id);
                             }
                         },
                         SwarmEvent::Behaviour(MyBehaviourEvent::Mdns(mdns::Event::Expired(list))) => {
                             for (peer_id, _multiaddr) in list {
                                 self.peer_addresses.remove(&peer_id);
-                                self.swarm.behaviour_mut().gossipsub.remove_explicit_peer(&peer_id);
+                                self.swarm.behaviour_mut().floodsub.remove_node_from_partial_view(&peer_id);
                             }
                         },
                         SwarmEvent::Behaviour(MyBehaviourEvent::RequestResponse(request_response::Event::Message { peer: _peer, message })) => {
@@ -304,12 +281,23 @@ impl Node {
                                 },
                             }
                         }
-                        SwarmEvent::Behaviour(MyBehaviourEvent::Gossipsub(gossipsub::Event::Message {
-                            propagation_source: _peer_id,
-                            message_id: _id,
-                            message,
-                        })) => {
-                           let peer_info: NodeInfo = serde_json::from_slice(&message.data).unwrap();
+                        SwarmEvent::Behaviour(MyBehaviourEvent::Floodsub(floodsub::FloodsubEvent::Subscribed { peer_id, topic: subscribed_topic })) => {
+                            if subscribed_topic == self.consensus_topic {
+                                let entry = self.topic_subscribers.entry(self.consensus_topic.clone()).or_insert(0);
+                                *entry += 1;
+                                info!("Peer {:?} subscribed to topic {:?}", peer_id, subscribed_topic);
+                            }
+                         } 
+                         SwarmEvent::Behaviour(MyBehaviourEvent::Floodsub(floodsub::FloodsubEvent::Unsubscribed { peer_id, topic })) => {
+                            if topic == self.consensus_topic {
+                                if let Some(count) = self.topic_subscribers.get_mut(&topic) {
+                                    *count -= 1;
+                                    info!("Peer {:?} unsubscribed from topic {:?}", peer_id, topic);
+                                }
+                            }
+                         } 
+                        SwarmEvent::Behaviour(MyBehaviourEvent::Floodsub(floodsub::FloodsubEvent::Message(msg))) => {
+                           let peer_info: NodeInfo = serde_json::from_slice(&msg.data).unwrap();
                            info!("Received publish {:?}", peer_info);
                            self.sorted_peers[peer_info.index] = peer_info.peer_id;
                         } 
@@ -385,13 +373,13 @@ impl Node {
                         SwarmEvent::Behaviour(MyBehaviourEvent::Mdns(mdns::Event::Discovered(list))) => {
                             for (peer_id, multiaddr) in list {
                                 self.peer_addresses.entry(peer_id).or_insert_with(Vec::new).push(multiaddr.clone());
-                                self.swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
+                                self.swarm.behaviour_mut().floodsub.add_node_to_partial_view(peer_id);
                             }
                         },
                         SwarmEvent::Behaviour(MyBehaviourEvent::Mdns(mdns::Event::Expired(list))) => {
                             for (peer_id, _multiaddr) in list {
                                 self.peer_addresses.remove(&peer_id);
-                                self.swarm.behaviour_mut().gossipsub.remove_explicit_peer(&peer_id);
+                                self.swarm.behaviour_mut().floodsub.remove_node_from_partial_view(&peer_id);
                             }
                         },
                         SwarmEvent::Behaviour(MyBehaviourEvent::RequestResponse(request_response::Event::Message { peer: _peer, message })) => {
@@ -421,12 +409,23 @@ impl Node {
                                 },
                             }
                         }
-                        SwarmEvent::Behaviour(MyBehaviourEvent::Gossipsub(gossipsub::Event::Message {
-                            propagation_source: _peer_id,
-                            message_id: _id,
-                            message,
-                        })) => {
-                           let peer_info: NodeInfo = serde_json::from_slice(&message.data).unwrap();
+                        SwarmEvent::Behaviour(MyBehaviourEvent::Floodsub(floodsub::FloodsubEvent::Subscribed { peer_id, topic: subscribed_topic })) => {
+                            if subscribed_topic == self.consensus_topic {
+                                let entry = self.topic_subscribers.entry(self.consensus_topic.clone()).or_insert(0);
+                                *entry += 1;
+                                info!("Peer {:?} subscribed to topic {:?}", peer_id, subscribed_topic);
+                            }
+                         } 
+                         SwarmEvent::Behaviour(MyBehaviourEvent::Floodsub(floodsub::FloodsubEvent::Unsubscribed { peer_id, topic })) => {
+                            if topic == self.consensus_topic {
+                                if let Some(count) = self.topic_subscribers.get_mut(&topic) {
+                                    *count -= 1;
+                                    info!("Peer {:?} unsubscribed from topic {:?}", peer_id, topic);
+                                }
+                            }
+                         } 
+                        SwarmEvent::Behaviour(MyBehaviourEvent::Floodsub(floodsub::FloodsubEvent::Message(msg))) => {
+                           let peer_info: NodeInfo = serde_json::from_slice(&msg.data).unwrap();
                            info!("Received publish {:?}", peer_info);
                            self.sorted_peers[peer_info.index] = peer_info.peer_id;
                         } 
