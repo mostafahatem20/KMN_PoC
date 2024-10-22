@@ -29,12 +29,13 @@ use crate::utils::utils::generate_array_u16;
 use crate::{ get_number_of_parties, get_threshold };
 use crate::network::node_server::kmn_poc::{ self };
 use std::error::Error;
-use tokio::sync::Mutex;
 use cggmp21::{ supported_curves::Secp256r1, PartialSignature, generic_ec::SecretScalar, KeyShare };
 use crate::protocol::{ key_export, key_import, sign };
 use rand::Rng; // Add this import for generating random values
 use uuid::Uuid;
-use log::info;
+use std::sync::atomic::{ AtomicI64, Ordering };
+use tokio::sync::{ Semaphore, Mutex }; // Import Semaphore from Tokio
+
 pub mod kmn_poc_client {
     tonic::include_proto!("kmn_poc_client"); // The string specified here must match the proto package name
 
@@ -48,6 +49,8 @@ pub mod kmn_poc_client {
 pub struct ClientServer {
     pub keys: Arc<Mutex<HashMap<(String, String), Option<String>>>>,
     pub clients: Vec<Arc<Mutex<KeyManagementClient<Channel>>>>,
+    pub index_counter: Arc<AtomicI64>, // Atomic counter for unique indexes
+    pub semaphore: Arc<Semaphore>, // Semaphore to allow a maximum of 10 concurrent requests
 }
 
 impl ClientServer {
@@ -65,6 +68,8 @@ impl ClientServer {
         Ok(ClientServer {
             keys: Arc::new(Mutex::new(keys)),
             clients,
+            index_counter: Arc::new(AtomicI64::new(0)),
+            semaphore: Arc::new(Semaphore::new(10)), // Allow only 10 concurrent requests
         })
     }
 }
@@ -77,71 +82,88 @@ impl KeyManagementService for ClientServer {
         request: Request<AssignKeyRequest>
     ) -> Result<Response<AssignKeyResponse>, Status> {
         let req = request.into_inner();
-        info!("Received AssignKey request: {:?}", req);
-
+        println!("Received AssignKey request");
         let id = req.id;
+        // Lock the keys map for safe access
         let mut keys = self.keys.lock().await;
 
-        // Try to find a key with a value of None (unassigned)
-        if let Some(((key_id, pub_key), value)) = keys.iter_mut().find(|(_, v)| v.is_none()) {
-            // Assign the id to this free key
-            *value = Some(id.clone());
+        // Fetch a unique index using atomic counter
+        let index = self.index_counter.fetch_add(1, Ordering::SeqCst);
 
-            let response = AssignKeyResponse {
-                key_id: key_id.clone(),
-                pub_key: pub_key.clone(), // Use the stored public key
-            };
+        // Try to assign a key from the first client
+        let client = self.clients.get(0).unwrap().clone(); // Get the first client
+        let assign_key_request = kmn_poc::AssignKeyRequest { index };
 
-            Ok(Response::new(response))
-        } else {
-            info!("No free key found, attempting to generate a new key...");
+        match assign_key_request_to_client(client, assign_key_request).await {
+            Ok(assign_key_response) => {
+                // Assign the key and add it to the HashMap
+                keys.insert(
+                    (assign_key_response.key_id.clone(), assign_key_response.pub_key.clone()),
+                    Some(id.clone())
+                );
+                println!("Len of keys {:?}", keys.len());
 
-            // If no free key is found, attempt to generate a new key
-            let room_id = rand::thread_rng().gen();
-            let eid: Vec<u8> = (0..32).map(|_| rand::random::<u8>()).collect();
+                let response = AssignKeyResponse {
+                    key_id: assign_key_response.key_id.clone(),
+                    pub_key: assign_key_response.pub_key.clone(),
+                };
 
-            let generate_req = kmn_poc::GenerateKeyRequest {
-                threshold: get_threshold() as i32,
-                number_of_parties: get_number_of_parties() as i32,
-                room_id,
-                eid,
-            };
+                Ok(Response::new(response))
+            }
+            Err(_) => {
+                println!("No key found, attempting to generate a new key...");
+                // Acquire a permit from the semaphore before proceeding
+                let permit = self.semaphore.acquire().await.unwrap();
+                // If no key is found, attempt to generate a new key
+                let room_id = rand::thread_rng().gen();
+                let eid: Vec<u8> = (0..32).map(|_| rand::random::<u8>()).collect();
 
-            let futures: Vec<_> = self.clients
-                .iter()
-                .enumerate()
-                .map(|(_, client)| generate_key_request(client.clone(), generate_req.clone()))
-                .collect();
+                let generate_req = kmn_poc::GenerateKeyRequest {
+                    threshold: get_threshold() as i32,
+                    number_of_parties: get_number_of_parties() as i32,
+                    room_id,
+                    eid,
+                };
 
-            let responses: Vec<kmn_poc::GenerateKeyResponse> = futures::future
-                ::join_all(futures).await
-                .into_iter()
-                .collect::<Result<_, _>>()
-                .map_err(|e| Status::internal(format!("Generate Key request failed: {}", e)))?;
+                // Generate the key using multiple clients
+                let futures: Vec<_> = self.clients
+                    .iter()
+                    .map(|client| generate_key_request(client.clone(), generate_req.clone()))
+                    .collect();
 
-            let new_key_response = responses.get(0).unwrap();
+                let responses: Vec<kmn_poc::GenerateKeyResponse> = futures::future
+                    ::join_all(futures).await
+                    .into_iter()
+                    .collect::<Result<_, _>>()
+                    .map_err(|e| Status::internal(format!("Generate Key request failed: {}", e)))?;
 
-            // Add the newly generated key (key_id, pub_key) to the HashMap
-            keys.insert(
-                (new_key_response.key_id.clone(), new_key_response.pub_key.clone()),
-                Some(id.clone())
-            );
+                let new_key_response = responses.get(0).unwrap();
 
-            let response = AssignKeyResponse {
-                key_id: new_key_response.key_id.clone(),
-                pub_key: new_key_response.pub_key.clone(),
-            };
+                // Add the newly generated key to the HashMap
+                keys.insert(
+                    (new_key_response.key_id.clone(), new_key_response.pub_key.clone()),
+                    Some(id.clone())
+                );
+                println!("Len of keys {:?}", keys.len());
 
-            Ok(Response::new(response))
+                let response = AssignKeyResponse {
+                    key_id: new_key_response.key_id.clone(),
+                    pub_key: new_key_response.pub_key.clone(),
+                };
+                drop(permit);
+
+                Ok(Response::new(response))
+            }
         }
     }
-
     async fn sign_online(
         &self,
         request: Request<SignOnlineRequest>
     ) -> Result<Response<SignOnlineResponse>, Status> {
+        // Acquire a permit from the semaphore before proceeding
+        let permit = self.semaphore.acquire().await.unwrap();
         let req = request.into_inner();
-        info!("Received Online Sign request: {:?}", req);
+        println!("Received Online Sign request: {:?}", req);
 
         // Generate a random i32 for room_id
         let room_id = rand::thread_rng().gen();
@@ -178,6 +200,8 @@ impl KeyManagementService for ClientServer {
             .map(|res| serde_json::from_str(&res.signature).unwrap())
             .collect();
 
+        drop(permit);
+
         Ok(
             Response::new(SignOnlineResponse {
                 signature: serde_json::to_string(&signature.get(0)).unwrap(),
@@ -189,8 +213,10 @@ impl KeyManagementService for ClientServer {
         &self,
         request: Request<GenerateKeyRequest>
     ) -> Result<Response<GenerateKeyResponse>, Status> {
+        // Acquire a permit from the semaphore before proceeding
+        let permit = self.semaphore.acquire().await.unwrap();
         let req = request.into_inner();
-        info!("Received Generate Key request: {:?}", req);
+        println!("Received Generate Key request: {:?}", req);
 
         // Generate a random i32 for room_id
         let room_id = rand::thread_rng().gen();
@@ -217,6 +243,7 @@ impl KeyManagementService for ClientServer {
             .collect::<Result<_, _>>()
             .map_err(|e| Status::internal(format!("Generate Key request failed: {}", e)))?;
         let first = responses.get(0).unwrap();
+        drop(permit);
 
         Ok(
             Response::new(GenerateKeyResponse {
@@ -228,7 +255,7 @@ impl KeyManagementService for ClientServer {
 
     async fn sign(&self, request: Request<SignRequest>) -> Result<Response<SignResponse>, Status> {
         let req = request.into_inner();
-        info!("Received Sign request: {:?}", req);
+        println!("Received Sign request: {:?}", req);
 
         let node_req = kmn_poc::SignRequest {
             msg: req.msg.clone(),
@@ -269,7 +296,9 @@ impl KeyManagementService for ClientServer {
                 Ok(Response::new(response))
             }
             Err(_) => {
-                info!("Sign request failed, attempting sign_online...");
+                // Acquire a permit from the semaphore before proceeding
+                let permit = self.semaphore.acquire().await.unwrap();
+                println!("Sign request failed, attempting sign_online...");
 
                 // Try the sign_online if the regular sign fails
                 let node_req_online = kmn_poc::SignOnlineRequest {
@@ -297,6 +326,8 @@ impl KeyManagementService for ClientServer {
                     .map(|res| serde_json::from_str(&res.signature).unwrap())
                     .collect();
 
+                drop(permit);
+
                 Ok(
                     Response::new(SignResponse {
                         signature: serde_json::to_string(&signature.get(0)).unwrap(),
@@ -311,7 +342,7 @@ impl KeyManagementService for ClientServer {
         request: Request<ExportKeyRequest>
     ) -> Result<Response<ExportKeyResponse>, Status> {
         let req = request.into_inner();
-        info!("Received ExportKey request: {:?}", req);
+        println!("Received ExportKey request: {:?}", req);
         let node_req = kmn_poc::GetKeyRequest {
             key_id: req.key_id,
         };
@@ -347,7 +378,7 @@ impl KeyManagementService for ClientServer {
         request: Request<KeyUpdateRequest>
     ) -> Result<Response<KeyUpdateResponse>, Status> {
         let req = request.into_inner();
-        info!("Received KeyUpdate request: {:?}", req);
+        println!("Received KeyUpdate request: {:?}", req);
         let key: SecretScalar<Secp256r1> = serde_json::from_str(&req.key).unwrap();
 
         let keys = key_import
@@ -358,7 +389,7 @@ impl KeyManagementService for ClientServer {
         let new_uuid = Uuid::new_v4().to_string();
         for (i, client) in self.clients.iter().enumerate() {
             let key_share = serde_json::to_string(&keys.get(i).unwrap()).unwrap();
-            info!("{:?}", key_share);
+            println!("{:?}", key_share);
             let node_req = kmn_poc::KeyUpdateRequest {
                 new_key_id: new_uuid.clone(),
                 key_id: req.key_id.clone(),
@@ -389,7 +420,7 @@ impl KeyManagementService for ClientServer {
         request: Request<CombinePublicKeysRequest>
     ) -> Result<Response<CombinePublicKeysResponse>, Status> {
         let req = request.into_inner();
-        info!("Received CombinePublicKeys request: {:?}", req);
+        println!("Received CombinePublicKeys request: {:?}", req);
         let pk_1: Point<Secp256r1> = serde_json::from_str(&req.pub_key).unwrap();
         let node_req = kmn_poc::GetKeyRequest {
             key_id: req.key_id.clone(),
@@ -422,7 +453,7 @@ pub async fn start_client_server(
     // Initialize the ClientServer with the updated keys_map
     let client_server = ClientServer::new(keys_map, urls).await?;
 
-    info!("Client Server listening on {}", addr);
+    println!("Client Server listening on {}", addr);
 
     let reflection_service = tonic_reflection::server::Builder
         ::configure()
@@ -490,5 +521,15 @@ async fn generate_key_request(
     let mut client = client.lock().await;
     let request = tonic::Request::new(req);
     let response = client.generate_key(request).await?;
+    Ok(response.into_inner())
+}
+
+async fn assign_key_request_to_client(
+    client: Arc<Mutex<KeyManagementClient<Channel>>>,
+    req: kmn_poc::AssignKeyRequest
+) -> Result<kmn_poc::AssignKeyResponse, Status> {
+    let mut client = client.lock().await;
+    let request = tonic::Request::new(req);
+    let response = client.assign_key(request).await?;
     Ok(response.into_inner())
 }

@@ -18,8 +18,9 @@ use kmn_poc::{
     GenerateKeyRequest,
     GenerateKeyResponse,
     KeyInfo,
+    AssignKeyRequest,
+    AssignKeyResponse,
 };
-use log::info;
 use crate::database::database::establish_connection;
 use crate::database::models::{ Key, PreSignature };
 use crate::network::node::Node;
@@ -46,7 +47,7 @@ pub struct NodeServer {}
 impl KeyManagement for NodeServer {
     async fn sign(&self, request: Request<SignRequest>) -> Result<Response<SignResponse>, Status> {
         let req = request.into_inner();
-        info!("Received Partial Sign request: {:?}", req);
+        println!("Received Partial Sign request: {:?}", req);
 
         let msg = req.msg;
         let key_id = req.key_id;
@@ -107,7 +108,7 @@ impl KeyManagement for NodeServer {
         request: Request<SignOnlineRequest>
     ) -> Result<Response<SignOnlineResponse>, Status> {
         let req = request.into_inner();
-        info!("Received Online Sign request: {:?}", req);
+        println!("Received Online Sign request: {:?}", req);
         let (connection_tx, mut connection_rx) = unbounded_channel();
         let index = get_index();
         let room_id = req.room_id;
@@ -161,7 +162,7 @@ impl KeyManagement for NodeServer {
         request: Request<GenerateKeyRequest>
     ) -> Result<Response<GenerateKeyResponse>, Status> {
         let req = request.into_inner();
-        info!("Received Generate Key request: {:?}", req);
+        println!("Received Generate Key request: {:?}", req);
         let (connection_tx, mut connection_rx) = unbounded_channel();
         let index = get_index();
         let room_id = req.room_id;
@@ -212,7 +213,7 @@ impl KeyManagement for NodeServer {
         request: Request<GetKeysRequest>
     ) -> Result<Response<GetKeysResponse>, Status> {
         let req = request.into_inner();
-        info!("Received GetKeys request: {:?}", req);
+        println!("Received GetKeys request: {:?}", req);
 
         // Establish database connection
         let connection = &mut establish_connection(get_database_url().to_string());
@@ -246,7 +247,7 @@ impl KeyManagement for NodeServer {
         request: Request<GetKeyRequest>
     ) -> Result<Response<GetKeyResponse>, Status> {
         let req = request.into_inner();
-        info!("Received GetKey request: {:?}", req);
+        println!("Received GetKey request: {:?}", req);
         // Establish database connection
         let connection = &mut establish_connection(get_database_url().to_string());
 
@@ -266,12 +267,48 @@ impl KeyManagement for NodeServer {
         Ok(Response::new(response))
     }
 
+    async fn assign_key(
+        &self,
+        request: Request<AssignKeyRequest>
+    ) -> Result<Response<AssignKeyResponse>, Status> {
+        let req = request.into_inner();
+        println!("Received AssignKey request: {:?}", req);
+
+        // Establish database connection
+        let connection = &mut establish_connection(get_database_url().to_string());
+
+        let index = req.index;
+
+        // Fetch the key by index and handle the case where no key is found
+        let key = match Key::get_key_by_index(connection, index) {
+            Some(key) => key,
+            None => {
+                return Err(Status::not_found(format!("No key found at index {}", index)));
+            }
+        };
+
+        // Deserialize the key_share
+        let key_share: KeyShare<Secp256r1> = match serde_json::from_str(&key.key_share) {
+            Ok(share) => share,
+            Err(e) => {
+                return Err(Status::internal(format!("Failed to deserialize key_share: {}", e)));
+            }
+        };
+
+        let response = AssignKeyResponse {
+            key_id: key.id.to_string(),
+            pub_key: serde_json::to_string(&key_share.core.shared_public_key).unwrap(),
+        };
+
+        Ok(Response::new(response))
+    }
+
     async fn key_update(
         &self,
         request: Request<KeyUpdateRequest>
     ) -> Result<Response<KeyUpdateResponse>, Status> {
         let req = request.into_inner();
-        info!("Received KeyUpdate request: {:?}", req);
+        println!("Received KeyUpdate request: {:?}", req);
         let connection = &mut establish_connection(get_database_url().to_string());
 
         let key_id = req.key_id;
@@ -398,7 +435,7 @@ pub async fn start_node_server(
 
     let _ = node_task.await?;
 
-    info!("NodeServer listening on {}", addr);
+    println!("NodeServer listening on {}", addr);
 
     let reflection_service = tonic_reflection::server::Builder
         ::configure()

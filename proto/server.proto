@@ -7,6 +7,7 @@ service KeyManagement {
   rpc SignOnline(SignOnlineRequest) returns (SignOnlineResponse);
   rpc GetKeys(GetKeysRequest) returns (GetKeysResponse);
   rpc GetKey(GetKeyRequest) returns (GetKeyResponse);
+  rpc AssignKey(AssignKeyRequest) returns (AssignKeyResponse);
   rpc KeyUpdate(KeyUpdateRequest) returns (KeyUpdateResponse);
   rpc GenerateKey(GenerateKeyRequest) returns (GenerateKeyResponse);
 }
@@ -50,6 +51,16 @@ message GetKeyRequest {
 message GetKeyResponse{
     string key_share = 1;
 }
+
+message AssignKeyRequest {
+    int64 index = 1;
+}
+
+message AssignKeyResponse{
+    string key_id = 1;
+    string pub_key = 2;
+}
+
 message KeyUpdateRequest {
     string key_id = 1;
     string new_key_id = 2;

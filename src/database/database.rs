@@ -75,6 +75,17 @@ impl Key {
             .expect("Error loading keys with no presignatures")
     }
 
+    pub fn get_key_by_index(conn: &mut PgConnection, index: i64) -> Option<Key> {
+        use super::schema::keys::dsl::*;
+
+        keys.order(id.asc()) // Order by id in ascending order
+            .limit(1) // Limit to a single result
+            .offset(index) // Offset by the given index
+            .first::<Key>(conn) // Get the first result (which will be the element at the index)
+            .optional() // Return None if the index is out of bounds
+            .expect("Error loading key at given index")
+    }
+
     pub fn get_by_id(conn: &mut PgConnection, key_id: Uuid) -> Option<String> {
         use super::schema::keys::dsl::*;
         use diesel::prelude::*;
