@@ -184,8 +184,16 @@ pub async fn generate_aux_info(
     threads: usize
 ) -> Result<(), Error> {
     let (connection_tx, mut connection_rx) = unbounded_channel();
-
-    let mut node = Node::new(index, Some(connection_tx), number_of_parties, topic.clone())?;
+    let (rs_tx_1, rs_rx_1) = unbounded_channel();
+    let (rs_tx_2, rs_rx_2) = unbounded_channel();
+    let mut node = Node::new(
+        index,
+        Some(connection_tx),
+        number_of_parties,
+        topic.clone(),
+        rs_rx_1,
+        rs_tx_2
+    )?;
 
     // Include the original iteration number with each receiver and sender pair
     let mut receiver_senders_auxinfo: Vec<_> = (0..number_of_iterations)
@@ -271,7 +279,16 @@ pub async fn generate_keys(
 ) -> Result<(), Error> {
     // Initialize the node
     let (connection_tx, mut connection_rx) = unbounded_channel();
-    let mut node = Node::new(index, Some(connection_tx), number_of_parties, topic)?;
+    let (rs_tx_1, rs_rx_1) = unbounded_channel();
+    let (rs_tx_2, rs_rx_2) = unbounded_channel();
+    let mut node = Node::new(
+        index,
+        Some(connection_tx),
+        number_of_parties,
+        topic,
+        rs_rx_1,
+        rs_tx_2
+    )?;
 
     let (receiver1, sender1) = node.add_receiver_sender(0);
 
@@ -361,8 +378,16 @@ pub async fn generate_keys_test(
     threads: usize
 ) -> Result<(), Error> {
     let (connection_tx, mut connection_rx) = unbounded_channel();
-
-    let mut node = Node::new(index, Some(connection_tx), number_of_parties, topic.clone())?;
+    let (rs_tx_1, rs_rx_1) = unbounded_channel();
+    let (rs_tx_2, rs_rx_2) = unbounded_channel();
+    let mut node = Node::new(
+        index,
+        Some(connection_tx),
+        number_of_parties,
+        topic.clone(),
+        rs_rx_1,
+        rs_tx_2
+    )?;
     info!("Node initialized with index: {}, number_of_parties: {}", index, number_of_parties);
 
     // Include the original iteration number with each receiver and sender pair
@@ -462,7 +487,9 @@ pub async fn generate_pre_signatures(
     let keys = Key::get_keys_with_no_presignatures(conn);
     let number_of_keys = keys.len();
     let (connection_tx, mut connection_rx) = unbounded_channel();
-    let mut node = Node::new(index, Some(connection_tx), threshold, topic)?;
+    let (rs_tx_1, rs_rx_1) = unbounded_channel();
+    let (rs_tx_2, rs_rx_2) = unbounded_channel();
+    let mut node = Node::new(index, Some(connection_tx), threshold, topic, rs_rx_1, rs_tx_2)?;
 
     // Set up receiver and sender pairs for presignature tasks
     let receiver_senders_presign: Vec<_> = (0..number_of_keys)
@@ -553,11 +580,15 @@ pub async fn generate_key(
 ) -> Result<KeyShare<Secp256r1>, Error> {
     // Initialize the node
     let (connection_tx, mut connection_rx) = unbounded_channel();
+    let (rs_tx_1, rs_rx_1) = unbounded_channel();
+    let (rs_tx_2, rs_rx_2) = unbounded_channel();
     let mut node = Node::new(
         index,
         Some(connection_tx),
         number_of_parties,
-        "dummy_key".to_string()
+        "dummy_key".to_string(),
+        rs_rx_1,
+        rs_tx_2
     )?;
 
     let (receiver1, sender1) = node.add_receiver_sender(0);
@@ -615,7 +646,16 @@ pub async fn generate_pre_signatures_with_one_key(
     if signers.contains(&(index as u16)) {
         // Initialize the node
         let (connection_tx, mut connection_rx) = unbounded_channel();
-        let mut node = Node::new(index, Some(connection_tx), threshold, topic.clone())?;
+        let (rs_tx_1, rs_rx_1) = unbounded_channel();
+        let (rs_tx_2, rs_rx_2) = unbounded_channel();
+        let mut node = Node::new(
+            index,
+            Some(connection_tx),
+            threshold,
+            topic.clone(),
+            rs_rx_1,
+            rs_tx_2
+        )?;
 
         // Include the original iteration number with each receiver and sender pair
         let mut receiver_senders_presign: Vec<_> = (0..number_of_iterations)
@@ -714,7 +754,16 @@ pub async fn generate_signatures_with_one_key(
     if signers.contains(&(index as u16)) {
         // Initialize the node
         let (connection_tx, mut connection_rx) = unbounded_channel();
-        let mut node = Node::new(index, Some(connection_tx), threshold, topic.clone())?;
+        let (rs_tx_1, rs_rx_1) = unbounded_channel();
+        let (rs_tx_2, rs_rx_2) = unbounded_channel();
+        let mut node = Node::new(
+            index,
+            Some(connection_tx),
+            threshold,
+            topic.clone(),
+            rs_rx_1,
+            rs_tx_2
+        )?;
 
         // Include the original iteration number with each receiver and sender pair
         let mut receiver_senders_sign: Vec<_> = (0..number_of_iterations)

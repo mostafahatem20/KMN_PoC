@@ -23,13 +23,21 @@ use kmn_poc::{
 };
 use crate::database::database::establish_connection;
 use crate::database::models::{ Key, PreSignature };
-use crate::network::node::Node;
+use crate::network::node::{
+    Node,
+    UnifiedReceiverMessage,
+    NodeReceiver,
+    NodeSender,
+    AddReceiverSenderRequest,
+};
 use crate::utils::utils::{ generate_array_u16, generate_uuid_v5_from_execution_id };
 use crate::{ get_aux_info, get_database_url, get_index, get_topic, set_aux_info };
 use crate::protocol::{ auxinfo, keyshare, sign, keygen };
 use crate::protocol::sign::partial_sign;
 use uuid::Uuid;
-use tokio::{ self, sync::mpsc::unbounded_channel };
+use tokio::{ self, sync::mpsc::{ unbounded_channel, UnboundedReceiver, UnboundedSender } };
+use std::sync::Arc;
+use tokio::sync::Mutex;
 pub mod kmn_poc {
     tonic::include_proto!("kmn_poc"); // The string specified here must match the proto package name
 
@@ -39,9 +47,22 @@ pub mod kmn_poc {
     );
 }
 
-#[derive(Debug, Default)]
-pub struct NodeServer {}
+pub struct NodeServer {
+    rs_channel_request: Arc<Mutex<UnboundedSender<UnifiedReceiverMessage>>>,
+    rs_channel_response: Arc<Mutex<UnboundedReceiver<(NodeReceiver, NodeSender)>>>,
+}
 
+impl NodeServer {
+    pub fn new(
+        rs_channel_request: UnboundedSender<UnifiedReceiverMessage>,
+        rs_channel_response: UnboundedReceiver<(NodeReceiver, NodeSender)>
+    ) -> Self {
+        NodeServer {
+            rs_channel_request: Arc::new(Mutex::new(rs_channel_request)),
+            rs_channel_response: Arc::new(Mutex::new(rs_channel_response)),
+        }
+    }
+}
 // Implement the gRPC service by implementing the KeyManagement trait
 #[tonic::async_trait]
 impl KeyManagement for NodeServer {
@@ -104,12 +125,12 @@ impl KeyManagement for NodeServer {
     }
 
     async fn sign_online(
-        &self,
+        &self, // Keep this as `&self` to match the expected trait signature
         request: Request<SignOnlineRequest>
     ) -> Result<Response<SignOnlineResponse>, Status> {
         let req = request.into_inner();
         println!("Received Online Sign request: {:?}", req);
-        let (connection_tx, mut connection_rx) = unbounded_channel();
+
         let index = get_index();
         let room_id = req.room_id;
         let msg = &req.msg;
@@ -126,19 +147,39 @@ impl KeyManagement for NodeServer {
                 return Err(Status::invalid_argument(format!("Invalid key_id: {}", e)));
             }
         };
+
         let key_share: KeyShare<Secp256r1> = serde_json
             ::from_str(&Key::get_by_id(connection, uuid).unwrap())
             .unwrap();
         let threshold = key_share.core.key_info.vss_setup.as_ref().unwrap().min_signers as usize;
-        let mut node = Node::new(index, Some(connection_tx), threshold, key_id).unwrap();
-        let (receiver1, sender1) = node.add_receiver_sender(room_id as usize);
-        let node_task = tokio::spawn(async move { node.run().await });
-        connection_rx.recv().await;
 
+        // Lock the mutex to send the request to add receiver/sender pair
+        {
+            let rs_channel_request = self.rs_channel_request.lock().await;
+            let add_request = UnifiedReceiverMessage::AddReceiverSender(AddReceiverSenderRequest {
+                room_id: room_id as usize,
+            });
+            if let Err(e) = rs_channel_request.send(add_request) {
+                return Err(Status::internal(format!("Failed to send request to node: {:?}", e)));
+            }
+        }
+
+        // Lock the mutex again to receive the sender/receiver pair
+        let (receiver, sender) = {
+            let mut rs_channel_response = self.rs_channel_response.lock().await;
+            match rs_channel_response.recv().await {
+                Some(rs_pair) => rs_pair,
+                None => {
+                    return Err(Status::internal("Failed to receive sender/receiver from node"));
+                }
+            }
+        };
+
+        // Perform signing using the received sender and receiver
         let (signature, _) = sign
             ::run(
-                sender1,
-                receiver1,
+                sender,
+                receiver,
                 index as u16,
                 key_share,
                 &generate_array_u16(threshold),
@@ -147,8 +188,6 @@ impl KeyManagement for NodeServer {
                 room_id as usize
             ).await
             .unwrap();
-
-        let _ = node_task.await.unwrap();
 
         let response = SignOnlineResponse {
             signature: serde_json::to_string(&signature).unwrap(),
@@ -163,7 +202,7 @@ impl KeyManagement for NodeServer {
     ) -> Result<Response<GenerateKeyResponse>, Status> {
         let req = request.into_inner();
         println!("Received Generate Key request: {:?}", req);
-        let (connection_tx, mut connection_rx) = unbounded_channel();
+
         let index = get_index();
         let room_id = req.room_id;
         let number_of_parties = req.number_of_parties;
@@ -172,16 +211,30 @@ impl KeyManagement for NodeServer {
 
         // Establish database connection
         let connection = &mut establish_connection(get_database_url().to_string());
-        let mut node = Node::new(
-            index,
-            Some(connection_tx),
-            number_of_parties as usize,
-            room_id.to_string()
-        ).map_err(|e| { Status::internal(format!("Failed to create node: {:?}", e)) })?;
-        let (receiver, sender) = node.add_receiver_sender(room_id as usize);
-        let node_task = tokio::spawn(async move { node.run().await });
-        connection_rx.recv().await;
 
+        // Send a request to add a receiver/sender pair for the specified room_id
+        let add_request = UnifiedReceiverMessage::AddReceiverSender(AddReceiverSenderRequest {
+            room_id: room_id as usize,
+        });
+        {
+            let rs_channel_request = self.rs_channel_request.lock().await;
+            if let Err(e) = rs_channel_request.send(add_request) {
+                return Err(Status::internal(format!("Failed to send request to node: {:?}", e)));
+            }
+        }
+
+        // Wait to receive the new receiver/sender pair from the Node
+        let (receiver, sender) = {
+            let mut rs_channel_response = self.rs_channel_response.lock().await;
+            match rs_channel_response.recv().await {
+                Some(rs_pair) => rs_pair,
+                None => {
+                    return Err(Status::internal("Failed to receive sender/receiver from node"));
+                }
+            }
+        };
+
+        // Run the key generation process
         let (incomplete_key_share, _) = keygen
             ::run(
                 sender,
@@ -189,17 +242,19 @@ impl KeyManagement for NodeServer {
                 index as u16,
                 threshold as u16,
                 number_of_parties as u16,
-                &eid,
+                eid,
                 room_id as usize
             ).await
             .unwrap();
 
-        let _ = node_task.await.unwrap();
         let key_id = generate_uuid_v5_from_execution_id(eid);
         let aux_info = auxinfo::load_from_string(get_aux_info().to_string()).unwrap();
         let key_share = keyshare::run(incomplete_key_share, aux_info).unwrap();
+
+        // Store the generated key in the database
         let _ = Key::create_key(connection, key_id, &serde_json::to_string(&key_share).unwrap());
 
+        // Build and return the response
         let response = GenerateKeyResponse {
             key_id: key_id.to_string(),
             pub_key: serde_json::to_string(&key_share.core.shared_public_key).unwrap(),
@@ -409,14 +464,27 @@ pub async fn start_node_server(
     number_of_parties: usize
 ) -> Result<(), Box<dyn std::error::Error>> {
     let addr = format!("[::1]:{}", port).parse().unwrap();
-    let node_server = NodeServer::default();
     let index = get_index();
-    // Initialize the node
+
+    // Initialize communication channels between the node and the server
+    let (rs_tx_1, rs_rx_1) = unbounded_channel();
+    let (rs_tx_2, rs_rx_2) = unbounded_channel();
+
+    // Create the Node and pass the request/response channels to it
     let topic = get_topic().to_string();
     let (connection_tx, mut connection_rx) = unbounded_channel();
-    let mut node = Node::new(index, Some(connection_tx), number_of_parties, topic)?;
+    let mut node = Node::new(
+        index,
+        Some(connection_tx),
+        number_of_parties,
+        topic,
+        rs_rx_1,
+        rs_tx_2
+    )?;
+    // Initialize the NodeServer with the same request/response channels
+    let node_server = NodeServer::new(rs_tx_1, rs_rx_2);
 
-    let (receiver1, sender1) = node.add_receiver_sender(0);
+    let (receiver1, sender1) = node.add_receiver_sender(1);
 
     let node_task = tokio::spawn(async move { node.run().await });
     connection_rx.recv().await;
@@ -425,15 +493,13 @@ pub async fn start_node_server(
     let auxinfo_task = tokio::spawn(async move {
         let eid: [u8; 32] = [0u8; 32];
         let (data, _) = auxinfo
-            ::run(sender1, receiver1, index as u16, number_of_parties as u16, &eid, 0).await
+            ::run(sender1, receiver1, index as u16, number_of_parties as u16, &eid, 1).await
             .unwrap();
         set_aux_info(&data);
     });
 
     // Wait for auxinfo and node tasks to complete
     let _ = auxinfo_task.await?;
-
-    let _ = node_task.await?;
 
     println!("NodeServer listening on {}", addr);
 
@@ -449,6 +515,8 @@ pub async fn start_node_server(
         .add_service(reflection_service) // Add the reflection service last
         .add_service(KeyManagementServer::new(node_server)) // Add your gRPC service first
         .serve(addr).await?;
+
+    let _ = node_task.await?;
 
     Ok(())
 }

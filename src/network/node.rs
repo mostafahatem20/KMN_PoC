@@ -80,6 +80,16 @@ pub struct NodeRequest {
     pub index: u16,
     pub room_id: usize,
 }
+
+pub struct AddReceiverSenderRequest {
+    pub room_id: usize,
+}
+
+pub enum UnifiedReceiverMessage {
+    RoomMessage(NodeRequest),
+    AddReceiverSender(AddReceiverSenderRequest),
+}
+
 pub struct Node {
     party_index: usize,
     number_of_parties: usize,
@@ -87,18 +97,20 @@ pub struct Node {
     sorted_peers: Vec<PeerId>,
     consensus_topic: gossipsub::IdentTopic,
     swarm: Swarm<MyBehaviour>,
-    receivers: HashMap<usize, UnboundedReceiver<NodeRequest>>,
+    receivers: HashMap<usize, UnboundedReceiver<UnifiedReceiverMessage>>,
     senders: HashMap<usize, UnboundedSender<Request>>,
     peer_addresses: HashMap<PeerId, Vec<Multiaddr>>,
     connection_signal: Option<UnboundedSender<()>>,
     signal_sent: bool,
+    rs_channel_response: UnboundedSender<(NodeReceiver, NodeSender)>,
 }
+
 pub struct NodeReceiver {
     from_worker: UnboundedReceiver<Request>,
 }
 
 pub struct NodeSender {
-    to_worker: UnboundedSender<NodeRequest>,
+    to_worker: UnboundedSender<UnifiedReceiverMessage>,
 }
 
 impl Node {
@@ -106,7 +118,9 @@ impl Node {
         index: usize,
         connection_signal: Option<UnboundedSender<()>>,
         number_of_parties: usize,
-        topic: String
+        topic: String,
+        rs_channel_request: UnboundedReceiver<UnifiedReceiverMessage>,
+        rs_channel_response: UnboundedSender<(NodeReceiver, NodeSender)>
     ) -> Result<Node, Error> {
         let mut swarm = libp2p::SwarmBuilder
             ::with_new_identity()
@@ -164,6 +178,8 @@ impl Node {
 
         let mut sorted_peers: Vec<PeerId> = Vec::new();
         sorted_peers.resize(number_of_parties, swarm.local_peer_id().clone());
+        let mut receivers = HashMap::new();
+        receivers.insert(0, rs_channel_request);
         let worker = Node {
             party_index: index,
             number_of_parties,
@@ -172,10 +188,11 @@ impl Node {
             consensus_topic: topic.clone(),
             peer_addresses: HashMap::new(),
             swarm,
-            receivers: HashMap::new(),
+            receivers: receivers,
             senders: HashMap::new(),
             connection_signal,
             signal_sent: false,
+            rs_channel_response,
         };
 
         Ok(worker)
@@ -199,6 +216,7 @@ impl Node {
     pub async fn run(mut self) -> Result<(), Error> {
         let mut room_id_to_remove: Option<usize> = None;
         let mut pending_requests: Vec<(PeerId, MsgId, usize)> = Vec::new();
+        let mut add_receiver_request: Option<AddReceiverSenderRequest> = None; // To handle `AddReceiverSenderRequest` after `select!`
 
         loop {
             let peers_connected = self.swarm
@@ -246,6 +264,16 @@ impl Node {
                 }
                 None => {}
             }
+            match add_receiver_request {
+                Some(add_request) => {
+                    let (receiver, sender) = self.add_receiver_sender(add_request.room_id);
+                    if let Err(e) = self.rs_channel_response.send((receiver, sender)) {
+                        error!("Failed to send new receiver/sender: {:?}", e);
+                    }
+                    add_receiver_request = None;
+                }
+                None => {}
+            }
             let receiver_futures: Vec<_> = self.receivers
                 .iter_mut()
                 .map(|(&room_id, rx)| {
@@ -278,32 +306,48 @@ impl Node {
                             }
                         },
                         SwarmEvent::Behaviour(MyBehaviourEvent::RequestResponse(request_response::Event::Message { peer: _peer, message })) => {
-                            match message{
+                            match message {
                                 request_response::Message::Request { request_id: _request_id, request, channel } => {
-                                    info!("Received request room {:?}, msg id {:?}, sender {:?}", request.room_id, request.request.id, request.request.sender);
+                                    info!(
+                                        "Received request room {:?}, msg id {:?}, sender {:?}",
+                                        request.room_id, request.request.id, request.request.sender
+                                    );
                                     let msg_id = request.request.id;
-                                    self.senders.get_mut(&request.room_id).unwrap().send(request.request)?;
-                                    let response = Response {
-                                        msg_id,
-                                        room_id: request.room_id,
-                                        peer_id: self.swarm.local_peer_id().clone()
-                                    };
-                                    
-                                    if let Err(e) = self.swarm.behaviour_mut().request_response.send_response(channel, response) {
-                                        // Handle the error gracefully
-                                        error!("Failed to send response: {:?}", e);
-                                        // You might also want to take some recovery actions here
+                        
+                                    // Gracefully handle if the room_id is not found in self.senders
+                                    if let Some(sender) = self.senders.get_mut(&request.room_id) {
+                                        if let Err(e) = sender.send(request.request) {
+                                            error!("Failed to send message to sender for room {:?}: {:?}", request.room_id, e);
+                                        }
+                        
+                                        // Build the response
+                                        let response = Response {
+                                            msg_id,
+                                            room_id: request.room_id,
+                                            peer_id: self.swarm.local_peer_id().clone(),
+                                        };
+                        
+                                        // Attempt to send the response
+                                        if let Err(e) = self.swarm.behaviour_mut().request_response.send_response(channel, response) {
+                                            error!("Failed to send response: {:?}", e);
+                                        }
+                                    } else {
+                                        // Log a warning and skip if the room_id is not available
+                                        println!("Room ID {:?} not found. Skipping request.", request.room_id);
                                     }
                                 },
                                 request_response::Message::Response { request_id: _request_id, response } => {
-                                    info!("Received response peer_id {:?} msg id {:?}, room {:?}",  response.peer_id, response.msg_id, response.room_id);
+                                    info!(
+                                        "Received response peer_id {:?} msg id {:?}, room {:?}",
+                                        response.peer_id, response.msg_id, response.room_id
+                                    );
                                     // Find the position of the first occurrence of (msg_id, room_id)
                                     if let Some(pos) = pending_requests.iter().position(|x| *x == (response.peer_id, response.msg_id, response.room_id)) {
                                         pending_requests.remove(pos); // Remove the first match
                                     }
                                 },
                             }
-                        }
+                        }                        
                         SwarmEvent::Behaviour(MyBehaviourEvent::Gossipsub(gossipsub::Event::Message {
                             propagation_source: _peer_id,
                             message_id: _id,
@@ -336,48 +380,53 @@ impl Node {
                         }
                         _ => {}
                  },
-                    request = futures::future::select_all(receiver_futures.into_iter().map(|(room_id, fut)| {
-                        Box::pin(async move {
-                            let result = fut.await;
-                            (room_id, result)
-                        })
-                    })).fuse() => {
+                 request = futures::future::select_all(receiver_futures.into_iter().map(|(room_id, fut)| {
+                    Box::pin(async move {
+                        let result = fut.await;
+                        (room_id, result)
+                    })
+                })).fuse() => {
                     match request {
-                        ((room_id, Some(request)), _, _) => {
-                            info!(
-                                "local room {:?} msg to be sent (Node) remote room {:?}, msg id: {:?}, receiver: {:?}, msg type {:?}",
-                                room_id,
-                                request.room_id,
-                                request.request.id,
-                                request.index,
-                                request.request.msg_type
-                            );
-                            let behaviour = self.swarm.behaviour_mut();
-                            let peers: Vec<_> = self.sorted_peers.clone();
-                            if request.request.msg_type == MessageType::Broadcast {
-                                for (i, peer_id) in peers.iter().enumerate() {
-                                    if i != self.party_index {
-                                    pending_requests.push((peer_id.clone(), request.request.id, request.room_id));
-                                    behaviour.request_response.send_request(peer_id, RequestWithReceiver{
-                                        room_id: request.room_id,
-                                        request: request.request.clone()
-                                    });
-                                }
-                                }
-                            } else {
-                                if let Some(peer_id) = self.sorted_peers.get(request.index as usize) {
-                                    pending_requests.push((peer_id.clone(), request.request.id, request.room_id));
-                                    behaviour.request_response.send_request(peer_id, RequestWithReceiver{
-                                        room_id: request.room_id,
-                                        request: request.request.clone()
-                                    });
+                        ((room_id, Some(message)), _, _) => {
+                            match message {
+                                UnifiedReceiverMessage::RoomMessage(request) => {
+                                    // Handle RoomMessage (same as before)
+                                    info!(
+                                        "local room {:?} msg to be sent (Node) remote room {:?}, msg id: {:?}, receiver: {:?}, msg type {:?}",
+                                        room_id, request.room_id, request.request.id, request.index, request.request.msg_type
+                                    );
+                                    let behaviour = self.swarm.behaviour_mut();
+                                    let peers: Vec<_> = self.sorted_peers.clone();
+                                    if request.request.msg_type == MessageType::Broadcast {
+                                        for (i, peer_id) in peers.iter().enumerate() {
+                                            if i != self.party_index {
+                                                pending_requests.push((peer_id.clone(), request.request.id, request.room_id));
+                                                behaviour.request_response.send_request(peer_id, RequestWithReceiver {
+                                                    room_id: request.room_id,
+                                                    request: request.request.clone(),
+                                                });
+                                            }
+                                        }
+                                    } else {
+                                        if let Some(peer_id) = self.sorted_peers.get(request.index as usize) {
+                                            pending_requests.push((peer_id.clone(), request.request.id, request.room_id));
+                                            behaviour.request_response.send_request(peer_id, RequestWithReceiver {
+                                                room_id: request.room_id,
+                                                request: request.request.clone(),
+                                            });
+                                        }
+                                    }
+                                },
+                                UnifiedReceiverMessage::AddReceiverSender(add_request_message) => {
+                                    // Handle AddReceiverSender request
+                                    add_receiver_request = Some(add_request_message);
                                 }
                             }
                         },
                         ((room_id, None), _, _) => {
                             // The receiver for the given room_id is closed, remove it from the map
                             room_id_to_remove = Some(room_id);
-                        },
+                        }
                     }
                 }
                 }
@@ -397,32 +446,48 @@ impl Node {
                             }
                         },
                         SwarmEvent::Behaviour(MyBehaviourEvent::RequestResponse(request_response::Event::Message { peer: _peer, message })) => {
-                            match message{
+                            match message {
                                 request_response::Message::Request { request_id: _request_id, request, channel } => {
-                                    info!("Received request room {:?}, msg id {:?}, sender {:?}", request.room_id, request.request.id, request.request.sender);
+                                    info!(
+                                        "Received request room {:?}, msg id {:?}, sender {:?}",
+                                        request.room_id, request.request.id, request.request.sender
+                                    );
                                     let msg_id = request.request.id;
-                                    self.senders.get_mut(&request.room_id).unwrap().send(request.request)?;
-                                    let response = Response {
-                                        msg_id,
-                                        room_id: request.room_id,
-                                        peer_id: self.swarm.local_peer_id().clone()
-                                    };
-                                    
-                                    if let Err(e) = self.swarm.behaviour_mut().request_response.send_response(channel, response) {
-                                        // Handle the error gracefully
-                                        error!("Failed to send response: {:?}", e);
-                                        // You might also want to take some recovery actions here
+                        
+                                    // Gracefully handle if the room_id is not found in self.senders
+                                    if let Some(sender) = self.senders.get_mut(&request.room_id) {
+                                        if let Err(e) = sender.send(request.request) {
+                                            error!("Failed to send message to sender for room {:?}: {:?}", request.room_id, e);
+                                        }
+                        
+                                        // Build the response
+                                        let response = Response {
+                                            msg_id,
+                                            room_id: request.room_id,
+                                            peer_id: self.swarm.local_peer_id().clone(),
+                                        };
+                        
+                                        // Attempt to send the response
+                                        if let Err(e) = self.swarm.behaviour_mut().request_response.send_response(channel, response) {
+                                            error!("Failed to send response: {:?}", e);
+                                        }
+                                    } else {
+                                        // Log a warning and skip if the room_id is not available
+                                        println!("Room ID {:?} not found. Skipping request.", request.room_id);
                                     }
                                 },
                                 request_response::Message::Response { request_id: _request_id, response } => {
-                                    info!("Received response peer_id {:?} msg id {:?}, room {:?}",  response.peer_id, response.msg_id, response.room_id);
+                                    info!(
+                                        "Received response peer_id {:?} msg id {:?}, room {:?}",
+                                        response.peer_id, response.msg_id, response.room_id
+                                    );
                                     // Find the position of the first occurrence of (msg_id, room_id)
                                     if let Some(pos) = pending_requests.iter().position(|x| *x == (response.peer_id, response.msg_id, response.room_id)) {
                                         pending_requests.remove(pos); // Remove the first match
                                     }
                                 },
                             }
-                        }
+                        }                        
                         SwarmEvent::Behaviour(MyBehaviourEvent::Gossipsub(gossipsub::Event::Message {
                             propagation_source: _peer_id,
                             message_id: _id,
@@ -465,7 +530,7 @@ impl Node {
 
 impl NodeSender {
     pub fn send_request(&self, message: NodeRequest) -> Result<(), Error> {
-        self.to_worker.send(message)?;
+        self.to_worker.send(UnifiedReceiverMessage::RoomMessage(message))?;
         Ok(())
     }
 }

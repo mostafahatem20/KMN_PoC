@@ -307,7 +307,7 @@ impl KeyManagementService for ClientServer {
                     room_id: rand::thread_rng().gen(),
                     eid: (0..32).map(|_| rand::random::<u8>()).collect(),
                 };
-
+                println!("{:?}", parties_indexes);
                 let futures_online: Vec<_> = self.clients
                     .iter()
                     .enumerate()
