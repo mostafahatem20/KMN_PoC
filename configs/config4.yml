@@ -2,6 +2,6 @@ index: 1
 database_username: db4user
 database_password: db4password
 database_host: localhost
-database_port: 5436
+database_port: 5437
 database_name: db4
 server_port: 50056

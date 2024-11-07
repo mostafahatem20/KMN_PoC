@@ -1,6 +1,6 @@
 threshold: 2
 number_of_parties: 3
-topic: consensus
+topic: cggmp21_consensus
 port: 50055
 urls:
   - "http://[::1]:50051"
